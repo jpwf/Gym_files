@@ -1,7 +1,7 @@
 import axios from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Em desenvolvimento local PWA: 'http://localhost:3000'
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL;
 
 export const api = axios.create({
   baseURL: BASE_URL,
@@ -10,16 +10,26 @@ export const api = axios.create({
   },
 });
 
-// Interceptor: Injeta automaticamente o Token JWT do Supabase/NestJS nas requisições
 api.interceptors.request.use(
   async (config) => {
-    // Exemplo: pegando o token salvo no localStorage (PWA Web) ou SecureStore (Nativo)
-    const token = typeof window !== 'undefined' ? localStorage.getItem('@gymfiles:token') : null;
+    const token = await AsyncStorage.getItem('authToken');
 
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+
     return config;
   },
   (error) => Promise.reject(error)
+);
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      await AsyncStorage.removeItem('authToken');
+    }
+
+    return Promise.reject(error);
+  }
 );
