@@ -1,20 +1,43 @@
-// prisma/schema.prisma
-
-generator client {
-  provider = "prisma-client-js"
-}
-
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model users {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  secretkey String   @map("secretkey")
-  admin     Boolean  @default(false) 
-  added   DateTime @default(now()) @map("added")
+generator client {
+  provider = "prisma-client-js"
+}
 
-  @@map("users")
+model users {
+  id        BigInt    @id @default(autoincrement()) // int8 no Postgres
+  email     String    @unique @db.VarChar
+  secretkey String?   @db.VarChar
+  admin     Boolean?  // Bool
+  added     DateTime? @default(now()) @db.Timestamp(6)
+  username  String?   @db.VarChar
+  updated   DateTime? @db.Timestamp(6)
+
+  // Relações
+  treinos   treinos[]
+  cardios   cardios[]
+}
+
+model treinos {
+  id      BigInt    @id @default(autoincrement()) // int8
+  user_id BigInt    // int8
+  tipo    String?   @db.Text
+  data    DateTime? @db.Timestamp(6)
+
+  // Relação com users
+  user    users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model cardios {
+  id          BigInt    @id @default(autoincrement()) // int8
+  duracao_min Float?    // float4 (suporta minutos quebrados se precisar)
+  tipo        String?   @db.Text
+  data        DateTime? @db.Timestamp(6)
+  user_id     BigInt    // int8
+
+  // Relação com users
+  user        users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }

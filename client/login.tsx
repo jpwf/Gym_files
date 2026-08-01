@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Alert,
@@ -11,10 +10,14 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { api } from './services/api';
 
-const API_URL = Platform.OS === 'android' ?  'http://localhost:3000' : 'http://localhost:3000';
+type LoginScreenProps = {
+  navigation?: any;
+  onLoginSuccess?: () => void;
+};
 
-export default function LoginScreen({ onLoginSuccess }: { onLoginSuccess: () => void }) {
+export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -28,16 +31,33 @@ export default function LoginScreen({ onLoginSuccess }: { onLoginSuccess: () => 
     setLoading(true);
 
     try {
-      const response = await axios.post(`${API_URL}/api/login`, {
+      const response = await api.post('/login', {
         email,
-        password: password,
+        password,
       });
 
       const token = response?.data?.token;
 
       if (token) {
         await AsyncStorage.setItem('authToken', token);
-        onLoginSuccess();
+
+        if (onLoginSuccess) {
+          onLoginSuccess();
+          return;
+        }
+
+        if (navigation?.reset) {
+          navigation.reset({
+            index: 0,
+            routes: [{ name: 'MainApp' }],
+          });
+          return;
+        }
+
+        if (navigation?.navigate) {
+          navigation.navigate('MainApp');
+          return;
+        }
       } else {
         Alert.alert('Erro', 'Login realizado, mas nenhum token foi retornado.');
       }

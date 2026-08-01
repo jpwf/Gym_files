@@ -3,7 +3,7 @@ import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import LoginScreen from './login';
-import AppDashboard from './interfaces/App';
+import AppDashboard from './App';
 
 export default function App() {
   const [showLogin, setShowLogin] = useState(false);
