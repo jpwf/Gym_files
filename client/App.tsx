@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import LoginScreen from './login';
 import AppNavigator from './navigator';
+import { navigationRef } from './navigation';
 
 const Stack = createNativeStackNavigator();
 
@@ -47,7 +48,7 @@ export default function App() {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <Stack.Navigator
         initialRouteName={initialRoute}
         screenOptions={{ headerShown: false }}

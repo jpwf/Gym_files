@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../services/api';
 import { DashboardData } from './types';
@@ -7,19 +7,30 @@ import { DashboardData } from './types';
 export default function HomeScreen() {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    const loadDashboard = async () => {
-      try {
-        const response = await api.get<DashboardData>('/dashboard');
-        setDashboardData(response.data);
-      } catch (error) {
-        console.error('Erro ao carregar dashboard:', error);
-      } finally {
+  const loadDashboard = async (isRefresh = false) => {
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+
+    try {
+      const response = await api.get<DashboardData>('/dashboard');
+      setDashboardData(response.data);
+    } catch (error) {
+      console.error('Erro ao carregar dashboard:', error);
+    } finally {
+      if (isRefresh) {
+        setRefreshing(false);
+      } else {
         setLoading(false);
       }
-    };
+    }
+  };
 
+  useEffect(() => {
     loadDashboard();
   }, []);
 
@@ -35,8 +46,24 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.greeting}>Olá, {dashboardData?.nome || 'Atleta'}!</Text>
-          <Text style={styles.subtitle}>Confira o seu resumo semanal</Text>
+          <View style={styles.headerTop}>
+            <View style={styles.headerText}>
+              <Text style={styles.greeting}>Olá, {dashboardData?.nome || 'Atleta'}!</Text>
+              <Text style={styles.subtitle}>Confira o seu resumo semanal</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.refreshButton}
+              onPress={() => loadDashboard(true)}
+              disabled={refreshing}
+              activeOpacity={0.8}
+            >
+              {refreshing ? (
+                <ActivityIndicator size="small" color="#2563eb" />
+              ) : (
+                <Ionicons name="refresh-outline" size={20} color="#2563eb" />
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.grid}>
@@ -73,8 +100,18 @@ const styles = StyleSheet.create({
   containerCentered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f8fafc' },
   content: { padding: 20 },
   header: { marginBottom: 24 },
+  headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerText: { flex: 1, marginRight: 12 },
   greeting: { fontSize: 24, fontWeight: 'bold', color: '#0f172a' },
   subtitle: { fontSize: 14, color: '#64748b', marginTop: 4 },
+  refreshButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#dbeafe',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   grid: { flexDirection: 'row', gap: 12, marginBottom: 20 },
   card: { flex: 1, padding: 16, borderRadius: 16, alignItems: 'center' },
   cardValue: { fontSize: 22, fontWeight: 'bold', color: '#0f172a', marginVertical: 6 },

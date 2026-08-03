@@ -36,6 +36,7 @@ model cardios {
   duracao_min Float?    // float4 (suporta minutos quebrados se precisar)
   tipo        String?   @db.Text
   data        DateTime? @db.Timestamp(6)
+  foto_url    String?   @db.Text
   user_id     BigInt    // int8
 
   // Relação com users

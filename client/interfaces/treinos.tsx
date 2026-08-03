@@ -1,25 +1,36 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, SafeAreaView } from 'react-native';
 import { api } from '../services/api';
 
 export default function TreinosScreen() {
-  const [workoutCount, setWorkoutCount] = useState('1');
-  const [selectedMuscle, setSelectedMuscle] = useState('Peito / Tríceps');
+  const [selectedMuscles, setSelectedMuscles] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const muscleGroups = ['Peito / Tríceps', 'Costas / Bíceps', 'Pernas Completo', 'Ombros / Trapézio', 'Full Body'];
+  const muscleGroups = ['Peito', 'Tríceps', 'Costas', 'Bíceps', 'Ombros', 'Quadríceps', 'Posterior de perna', 'Abdomem'];
+
+  const toggleMuscleGroup = (group: string) => {
+    setSelectedMuscles((current) =>
+      current.includes(group) ? current.filter((item) => item !== group) : [...current, group]
+    );
+  };
 
   const handleRegister = async () => {
+    if (selectedMuscles.length === 0) {
+      Alert.alert('Atenção', 'Selecione pelo menos um grupamento muscular.');
+      return;
+    }
+
     setLoading(true);
 
     try {
       await api.post('/treinos', {
-        tipo: selectedMuscle,
-        detalhes: `${workoutCount} treino(s) registrado(s)`,
+        tipo: selectedMuscles,
         data: new Date().toISOString(),
       });
 
-      Alert.alert('Sucesso!', `${workoutCount} treino de ${selectedMuscle} registrado!`);
+      const groupsLabel = selectedMuscles.join(', ');
+      Alert.alert('Sucesso!', `Treino de ${groupsLabel} registrado!`);
+      setSelectedMuscles([]);
     } catch (error: any) {
       const message = error?.response?.data?.error || 'Não foi possível salvar o treino.';
       Alert.alert('Erro', message);
@@ -33,27 +44,25 @@ export default function TreinosScreen() {
       <View style={styles.content}>
         <Text style={styles.title}>Registrar Treino</Text>
 
-        <Text style={styles.label}>Quantidade de Treinos no Dia:</Text>
-        <TextInput
-          style={styles.input}
-          keyboardType="numeric"
-          value={workoutCount}
-          onChangeText={setWorkoutCount}
-        />
+       
 
-        <Text style={styles.label}>Grupamento Muscular:</Text>
+        <Text style={styles.label}>Grupamentos Musculares:</Text>
         <View style={styles.chipContainer}>
-          {muscleGroups.map((group) => (
-            <TouchableOpacity
-              key={group}
-              style={[styles.chip, selectedMuscle === group && styles.chipActive]}
-              onPress={() => setSelectedMuscle(group)}
-            >
-              <Text style={[styles.chipText, selectedMuscle === group && styles.chipTextActive]}>
-                {group}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {muscleGroups.map((group) => {
+            const isSelected = selectedMuscles.includes(group);
+
+            return (
+              <TouchableOpacity
+                key={group}
+                style={[styles.chip, isSelected && styles.chipActive]}
+                onPress={() => toggleMuscleGroup(group)}
+              >
+                <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>
+                  {group}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
         <TouchableOpacity style={[styles.button, { backgroundColor: '#16a34a' }]} onPress={handleRegister} disabled={loading}>

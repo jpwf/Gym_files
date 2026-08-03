@@ -4,10 +4,12 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const validateLogin = require('./middleware/validateLogin');
 const verifyJWT = require('./middleware/verifyJWT'); 
+const path = require('path');
+const { supabase } = require('./services/supabase-storage');
 
 const PIPEFY_TOKEN = process.env.PIPEFYKEY;
 const ORG_ID = process.env.PIPEFY_ORG_ID;
-
+const upload = require('./middleware/upload_img');
 let prisma;
 try {
   const { PrismaClient } = require('@prisma/client');
@@ -147,18 +149,49 @@ router.get('/dashboard', verifyJWT, async (req, res) => {
     return res.status(500).json({ error: 'Erro interno ao carregar dados do painel.' });
   }
 });
-router.post('/cardios', verifyJWT, async (req, res) => {
+router.post('/cardios', verifyJWT, upload.single('foto'), async (req, res) => {
   if (!prisma) {
     return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
   }
 
   try {
     const userId = BigInt(req.user.id);
+
+    if (!req.file) {
+      return res.status(400).json({ 
+        error: 'É obrigatório enviar uma foto de comprovação para registrar o cardio.' 
+      });
+    }
+
     const { tipo, duracao_min, data } = req.body;
 
     if (!tipo || duracao_min === undefined) {
       return res.status(400).json({ error: 'Informe o tipo de cardio e a duração em minutos.' });
     }
+
+    // --- ENVIAR PARA O SUPABASE STORAGE ---
+    const fileExt = path.extname(req.file.originalname) || '.jpg';
+    const fileName = `cardio-${userId}-${Date.now()}${fileExt}`;
+
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('comprovantes-cardio') // Nome do seu Bucket no Supabase
+      .upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.error('Erro no Supabase Storage:', uploadError);
+      return res.status(500).json({ error: 'Falha ao salvar a imagem na nuvem.' });
+    }
+
+    // Pega a URL pública gerada no Supabase Storage
+    const { data: publicUrlData } = supabase.storage
+      .from('comprovantes-cardio')
+      .getPublicUrl(fileName);
+
+    const foto_url = publicUrlData.publicUrl;
+    // -------------------------------------
 
     const cardioDate = data ? new Date(data) : new Date();
 
@@ -166,6 +199,7 @@ router.post('/cardios', verifyJWT, async (req, res) => {
       data: {
         user_id: userId,
         tipo: tipo,
+        foto_url, // URL permanente do Supabase Storage
         duracao_min: Number(duracao_min),
         data: cardioDate,
       },
@@ -196,7 +230,19 @@ router.post('/treinos', verifyJWT, async (req, res) => {
     const userId = BigInt(req.user.id);
     const { tipo, data } = req.body;
 
-    if (!tipo) {
+    let tipoTreino = '';
+
+    if (Array.isArray(tipo)) {
+      const gruposSelecionados = tipo.filter((item) => typeof item === 'string' && item.trim());
+
+      if (gruposSelecionados.length === 0) {
+        return res.status(400).json({ error: 'Informe pelo menos um grupamento muscular.' });
+      }
+
+      tipoTreino = gruposSelecionados.join(', ');
+    } else if (typeof tipo === 'string' && tipo.trim()) {
+      tipoTreino = tipo.trim();
+    } else {
       return res.status(400).json({ error: 'Informe o tipo do treino.' });
     }
 
@@ -205,7 +251,7 @@ router.post('/treinos', verifyJWT, async (req, res) => {
     const novoTreino = await prisma.treinos.create({
       data: {
         user_id: userId,
-        tipo: tipo,
+        tipo: tipoTreino,
         data: treinoDate,
       },
     });
