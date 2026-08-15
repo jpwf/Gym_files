@@ -353,5 +353,7 @@ router.get('/profile-data', verifyJWT, async (req, res) => {
     return res.status(500).json({ error: 'Erro interno ao carregar perfil.' });
   }
 });
-
+router.get('/health', (req, res) => {
+  return res.status(200).send('OK');
+});
 module.exports = router;

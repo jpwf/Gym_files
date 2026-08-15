@@ -7,7 +7,9 @@ import {
   TouchableOpacity, 
   Alert, 
   SafeAreaView,
-  Image 
+  Image,
+  ScrollView,
+  Modal
 } from 'react-native';
 import { api } from '../services/api';
 
@@ -15,6 +17,8 @@ export default function CardiosScreen() {
   const [minutes, setMinutes] = useState('');
   const [selectedType, setSelectedType] = useState('Esteira');
   const [loading, setLoading] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
 
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -90,7 +94,8 @@ export default function CardiosScreen() {
           },
         });
 
-      Alert.alert('Sucesso!', `${minutes} min de ${selectedType} registrados!`);
+      setSuccessMessage(`${minutes} min de ${selectedType} registrados!`);
+      setShowSuccessModal(true);
 
       setMinutes('');
       setPhotoFile(null);
@@ -105,7 +110,11 @@ export default function CardiosScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
         <Text style={styles.title}>Registrar Cardio</Text>
 
         <Text style={styles.label}>Duração (em minutos):</Text>
@@ -162,14 +171,38 @@ export default function CardiosScreen() {
         >
           <Text style={styles.buttonText}>{loading ? 'Enviando...' : 'Salvar Cardio'}</Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
+
+      <Modal
+        transparent
+        visible={showSuccessModal}
+        animationType="fade"
+        onRequestClose={() => setShowSuccessModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Registro concluído!</Text>
+            <Text style={styles.modalText}>{successMessage}</Text>
+            <TouchableOpacity
+              style={styles.modalButton}
+              onPress={() => setShowSuccessModal(false)}
+            >
+              <Text style={styles.modalButtonText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8fafc' },
-  content: { padding: 20 },
+  content: {
+    flexGrow: 1,
+    padding: 20,
+    paddingBottom: 32,
+  },
   title: { fontSize: 22, fontWeight: 'bold', color: '#0f172a', marginBottom: 20 },
   label: { fontSize: 14, fontWeight: '600', color: '#334155', marginBottom: 8, marginTop: 12 },
   input: {
@@ -233,4 +266,43 @@ const styles = StyleSheet.create({
     backgroundColor: '#93c5fd',
   },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 8,
+  },
+  modalText: {
+    fontSize: 16,
+    color: '#334155',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  modalButton: {
+    backgroundColor: '#2563eb',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    width: '100%',
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
 });

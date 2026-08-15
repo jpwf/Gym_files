@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, SafeAreaView, Modal } from 'react-native';
 import { api } from '../services/api';
 
 export default function TreinosScreen() {
   const [selectedMuscles, setSelectedMuscles] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
 
   const muscleGroups = ['Peito', 'Tríceps', 'Costas', 'Bíceps', 'Ombros', 'Quadríceps', 'Posterior de perna', 'Abdomem'];
 
@@ -29,7 +31,8 @@ export default function TreinosScreen() {
       });
 
       const groupsLabel = selectedMuscles.join(', ');
-      Alert.alert('Sucesso!', `Treino de ${groupsLabel} registrado!`);
+      setSuccessMessage(`Treino de ${groupsLabel} registrado!`);
+      setShowSuccessModal(true);
       setSelectedMuscles([]);
     } catch (error: any) {
       const message = error?.response?.data?.error || 'Não foi possível salvar o treino.';
@@ -43,8 +46,6 @@ export default function TreinosScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
         <Text style={styles.title}>Registrar Treino</Text>
-
-       
 
         <Text style={styles.label}>Grupamentos Musculares:</Text>
         <View style={styles.chipContainer}>
@@ -69,6 +70,26 @@ export default function TreinosScreen() {
           <Text style={styles.buttonText}>{loading ? 'Salvando...' : 'Salvar Treino'}</Text>
         </TouchableOpacity>
       </View>
+
+      <Modal
+        transparent
+        visible={showSuccessModal}
+        animationType="fade"
+        onRequestClose={() => setShowSuccessModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Registro concluído!</Text>
+            <Text style={styles.modalText}>{successMessage}</Text>
+            <TouchableOpacity
+              style={styles.modalButton}
+              onPress={() => setShowSuccessModal(false)}
+            >
+              <Text style={styles.modalButtonText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -98,4 +119,43 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#fff', fontWeight: 'bold' },
   button: { padding: 16, borderRadius: 12, alignItems: 'center' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 8,
+  },
+  modalText: {
+    fontSize: 16,
+    color: '#334155',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  modalButton: {
+    backgroundColor: '#16a34a',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    width: '100%',
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
 });
