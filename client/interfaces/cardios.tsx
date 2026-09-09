@@ -19,6 +19,7 @@ export default function CardiosScreen() {
   const [loading, setLoading] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [showSourceModal, setShowSourceModal] = useState(false);
 
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -53,10 +54,17 @@ export default function CardiosScreen() {
     setPhotoPreview(URL.createObjectURL(file));
   };
 
-  const triggerCamera = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click();
+  const triggerFilePicker = (mode: 'camera' | 'gallery' = 'gallery') => {
+    if (!fileInputRef.current) return;
+
+    if (mode === 'camera') {
+      fileInputRef.current.setAttribute('capture', 'environment');
+    } else {
+      fileInputRef.current.removeAttribute('capture');
     }
+
+    setShowSourceModal(false);
+    fileInputRef.current.click();
   };
 
   const handleRegister = async () => {
@@ -146,17 +154,20 @@ export default function CardiosScreen() {
         <input
           type="file"
           accept="image/*"
-          capture="environment"
           ref={fileInputRef}
           onChange={handleFileChange}
           style={{ display: 'none' }}
         />
 
-        <TouchableOpacity style={styles.uploadButton} onPress={triggerCamera}>
-          <Text style={styles.uploadButtonText}>
-            {photoFile ? 'Trocar Foto' : 'Tirar/Anexar Foto do Cardio'}
+        <TouchableOpacity
+          style={styles.uploadButtonSingle}
+          onPress={() => setShowSourceModal(true)}
+        >
+          <Text style={styles.uploadButtonTextSingle}>
+            {photoFile ? 'Trocar comprovante' : 'Selecionar comprovante'}
           </Text>
         </TouchableOpacity>
+
         {photoPreview && (
           <View style={styles.previewContainer}>
             <Image source={{ uri: photoPreview }} style={styles.previewImage} />
@@ -172,6 +183,31 @@ export default function CardiosScreen() {
           <Text style={styles.buttonText}>{loading ? 'Enviando...' : 'Salvar Cardio'}</Text>
         </TouchableOpacity>
       </ScrollView>
+
+      <Modal
+        transparent
+        visible={showSourceModal}
+        animationType="fade"
+        onRequestClose={() => setShowSourceModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Selecionar comprovante</Text>
+            <TouchableOpacity
+              style={[styles.modalChoiceButton, styles.primaryButton]}
+              onPress={() => triggerFilePicker('camera')}
+            >
+              <Text style={styles.modalChoiceText}>Tirar foto</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalChoiceButton, styles.secondaryButton]}
+              onPress={() => triggerFilePicker('gallery')}
+            >
+              <Text style={[styles.modalChoiceText, styles.secondaryButtonText]}>Escolher da galeria</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         transparent
@@ -214,6 +250,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  fileActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 8,
+  },
+  uploadButtonSingle: {
+    backgroundColor: '#2563eb',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  uploadButtonTextSingle: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 15,
+  },
   chip: {
     paddingVertical: 10,
     paddingHorizontal: 16,
@@ -225,19 +281,30 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#fff', fontWeight: 'bold' },
   
   uploadButton: {
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderStyle: 'dashed',
+    flex: 1,
+    minWidth: 140,
     borderRadius: 12,
-    padding: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 16,
   },
+  primaryButton: {
+    backgroundColor: '#2563eb',
+  },
+  secondaryButton: {
+    backgroundColor: '#e2e8f0',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
   uploadButtonText: {
-    color: '#0284c7',
+    color: '#fff',
     fontWeight: '600',
     fontSize: 15,
+  },
+  secondaryButtonText: {
+    color: '#0f172a',
   },
   previewContainer: {
     alignItems: 'center',
@@ -291,6 +358,19 @@ const styles = StyleSheet.create({
     color: '#334155',
     textAlign: 'center',
     marginBottom: 20,
+  },
+  modalChoiceButton: {
+    width: '100%',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  modalChoiceText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
   modalButton: {
     backgroundColor: '#2563eb',

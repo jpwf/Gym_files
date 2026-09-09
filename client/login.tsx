@@ -18,23 +18,24 @@ type LoginScreenProps = {
 };
 
 export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenProps) {
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   async function handleLogin() {
-    if (!email || !password) {
-      Alert.alert('Atenção', 'Informe e-mail e senha.');
+    if (!identifier || !password) {
+      Alert.alert('Atenção', 'Informe e-mail ou nome de usuário e senha.');
       return;
     }
+
+    const isEmail = identifier.includes('@');
 
     setLoading(true);
 
     try {
-      const response = await api.post('/login', {
-        email,
-        password,
-      });
+      const response = await api.post('/login', isEmail
+        ? { email: identifier, password }
+        : { username: identifier, password });
 
       const token = response?.data?.token;
 
@@ -62,8 +63,12 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
         Alert.alert('Erro', 'Login realizado, mas nenhum token foi retornado.');
       }
     } catch (error: any) {
-      const message = error?.response?.data?.message || error?.response?.data?.error || 'Erro ao realizar login.';
-      Alert.alert('Erro', message);
+      const message =
+        error?.response?.data?.message ||
+        error?.response?.data?.error ||
+        'Erro no login';
+
+      Alert.alert('Erro no login', message);
     } finally {
       setLoading(false);
     }
@@ -76,15 +81,15 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
     >
       <View style={styles.card}>
         <Text style={styles.title}>Login</Text>
-        <Text style={styles.subtitle}>Entre com seu e-mail e senha</Text>
+        <Text style={styles.subtitle}>Entre com seu e-mail ou nome de usuário e senha</Text>
 
         <TextInput
           style={styles.input}
-          placeholder="E-mail"
-          value={email}
-          onChangeText={setEmail}
+          placeholder="E-mail ou nome de usuário"
+          value={identifier}
+          onChangeText={setIdentifier}
           autoCapitalize="none"
-          keyboardType="email-address"
+          keyboardType="default"
         />
 
         <TextInput
