@@ -20,24 +20,40 @@ try {
 
 
 router.post('/login', validateLogin, async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, username } = req.body;
 
   if (!prisma) {
     return res.status(500).json({ 
-      error: 'Prisma não disponível no servidor. Configure a camada de dados.' 
+      message: 'Prisma não disponível no servidor. Configure a camada de dados.' 
     });
   }
 
   try {
-    const cleanEmail = email?.trim();
+    const cleanEmail = typeof email === 'string' ? email.trim() : '';
+    const cleanUsername = typeof username === 'string' ? username.trim() : '';
+    const loginIdentifier = cleanEmail || cleanUsername;
 
-    const user = await prisma.users.findUnique({ 
-      where: { email: cleanEmail } 
-    });
+    let user = null;
+
+    if (cleanEmail) {
+      user = await prisma.users.findUnique({
+        where: { email: cleanEmail }
+      });
+    } else if (cleanUsername) {
+      user = await prisma.users.findFirst({
+        where: {
+          username: {
+            equals: cleanUsername,
+            mode: 'insensitive'
+          }
+        }
+      });
+    }
+
     if (!user) {
-      console.log(`[LOGIN FAILED] Usuário "${cleanEmail}" não foi encontrado no banco.`);
-      return res.status(401).json({ 
-        error: 'Credenciais inválidas',
+      console.log(`[LOGIN FAILED] Usuário "${loginIdentifier}" não foi encontrado no banco.`);
+      return res.status(401).json({
+        message: 'Acesso ou senha incorretas',
         reason: 'USER_NOT_FOUND'
       });
     }
@@ -52,9 +68,9 @@ router.post('/login', validateLogin, async (req, res) => {
       validPassword = (password === storedPassword);
 
       if (validPassword) {
-        console.log(`Migrando senha do usuário "${cleanEmail}" para hash BCrypt...`);
+        console.log(`Migrando senha do usuário "${user.email}" para hash BCrypt...`);
         const newHash = await bcrypt.hash(password, 10);
-        
+
         await prisma.users.update({
           where: { id: user.id },
           data: { secretkey: newHash }
@@ -63,9 +79,9 @@ router.post('/login', validateLogin, async (req, res) => {
     }
 
     if (!validPassword) {
-      console.log(`[LOGIN FAILED] Senha incorreta para o usuário "${cleanEmail}".`);
-      return res.status(401).json({ 
-        error: 'Credenciais inválidas',
+      console.log(`[LOGIN FAILED] Senha incorreta para o usuário "${user.email || user.username}".`);
+      return res.status(401).json({
+        message: 'Acesso ou senha incorretas',
         reason: 'INVALID_PASSWORD'
       });
     }
@@ -124,7 +140,13 @@ router.get('/dashboard', verifyJWT, async (req, res) => {
           GROUP BY user_id
       ) t ON t.user_id = u.id
       LEFT JOIN (
-          SELECT user_id, SUM(duracao_min) AS total_minutos
+          SELECT user_id,
+                 SUM(
+                   CASE
+                     WHEN lower(tipo) LIKE '%escada%' THEN duracao_min * 2
+                     ELSE duracao_min
+                   END
+                 ) AS total_minutos
           FROM cardios
           WHERE DATE_TRUNC('week', data) = DATE_TRUNC('week', NOW())
           GROUP BY user_id
@@ -292,7 +314,13 @@ router.get('/ranking', verifyJWT, async (req, res) => {
           GROUP BY user_id
       ) t ON t.user_id = u.id
       LEFT JOIN (
-          SELECT user_id, SUM(duracao_min) AS total_minutos
+          SELECT user_id,
+                 SUM(
+                   CASE
+                     WHEN lower(tipo) LIKE '%escada%' THEN duracao_min * 2
+                     ELSE duracao_min
+                   END
+                 ) AS total_minutos
           FROM cardios
           WHERE DATE_TRUNC('week', data) = DATE_TRUNC('week', NOW())
           GROUP BY user_id

@@ -1,8 +1,9 @@
 module.exports = function validateLogin(req, res, next) {
-  const { email, password } = req.body;
+  const { email, username, password } = req.body;
+  const identifier = (email ?? username ?? '').trim();
 
-  if (!email || typeof email !== 'string' || email.trim().length === 0) {
-    return res.status(400).json({ error: 'Usuário inválido ou ausente' });
+  if (!identifier || typeof identifier !== 'string' || identifier.length === 0) {
+    return res.status(400).json({ error: 'E-mail ou nome de usuário inválido ou ausente' });
   }
 
   if (!password || typeof password !== 'string' || password.length < 6) {
