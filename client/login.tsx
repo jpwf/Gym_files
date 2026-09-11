@@ -50,13 +50,13 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
         if (navigation?.reset) {
           navigation.reset({
             index: 0,
-            routes: [{ name: 'MainApp' }],
+            routes: [{ name: 'Gym Files' }],
           });
           return;
         }
 
         if (navigation?.navigate) {
-          navigation.navigate('MainApp');
+          navigation.navigate('Gym Files');
           return;
         }
       } else {

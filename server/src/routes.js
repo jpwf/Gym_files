@@ -92,12 +92,13 @@ router.post('/login', validateLogin, async (req, res) => {
       return res.status(500).json({ error: 'Erro de configuração no servidor' });
     }
 
+    const isTrainer = user.admin === true;
     const userId = typeof user.id === 'bigint' ? user.id.toString() : user.id;
     const token = jwt.sign(
       { 
         id: userId, 
         email: user.email, 
-        admin: user.admin 
+        admin: isTrainer
       }, 
       jwtSecret, 
       { expiresIn: '3h' }
@@ -108,7 +109,7 @@ router.post('/login', validateLogin, async (req, res) => {
       user: {
         id: userId,
         email: user.email,
-        admin: user.admin
+        admin: isTrainer
       }
     });
 
@@ -130,8 +131,12 @@ router.get('/dashboard', verifyJWT, async (req, res) => {
       SELECT 
           u.id AS user_id,
           u.username,
+          u.admin,
           COALESCE(t.total_treinos, 0)::INTEGER AS treinos,
-          COALESCE(c.total_minutos, 0)::INTEGER AS minutos
+          COALESCE(c.total_minutos, 0)::INTEGER AS minutos,
+          COALESCE(c.total_pontos, 0)::INTEGER AS pontos,
+          COALESCE(u.cardio_meta_min, 0)::INTEGER AS meta_cardio_minutos,
+          GREATEST(COALESCE(u.cardio_meta_min, 0) - COALESCE(c.total_minutos, 0), 0)::INTEGER AS minutos_faltantes
       FROM users u
       LEFT JOIN (
           SELECT user_id, COUNT(id) AS total_treinos
@@ -141,29 +146,43 @@ router.get('/dashboard', verifyJWT, async (req, res) => {
       ) t ON t.user_id = u.id
       LEFT JOIN (
           SELECT user_id,
+                 SUM(duracao_min) AS total_minutos,
                  SUM(
                    CASE
                      WHEN lower(tipo) LIKE '%escada%' THEN duracao_min * 2
                      ELSE duracao_min
                    END
-                 ) AS total_minutos
+                 ) AS total_pontos
           FROM cardios
           WHERE DATE_TRUNC('week', data) = DATE_TRUNC('week', NOW())
           GROUP BY user_id
       ) c ON c.user_id = u.id
-      ORDER BY minutos DESC, treinos DESC;
+      ORDER BY pontos DESC, treinos DESC;
     `;
 
     const userIndex = rankingResult.findIndex(item => String(item.user_id) === String(userId));
+    const isTrainer = req.user.admin === true;
 
-    const userData = userIndex !== -1 ? rankingResult[userIndex] : { treinos: 0, minutos: 0 };
+    const userData = userIndex !== -1 ? rankingResult[userIndex] : {
+      treinos: 0,
+      minutos: 0,
+      pontos: 0,
+      meta_cardio_minutos: 0,
+      minutos_faltantes: 0,
+      admin: isTrainer,
+      username: req.user.email.split('@')[0],
+    };
     const rankPosition = userIndex !== -1 ? userIndex + 1 : rankingResult.length + 1;
 
     return res.json({
       nome: userData.username || req.user.email.split('@')[0],
       resumoTreinos: userData.treinos,
       minutosCardio: userData.minutos,
+      pontosCardio: userData.pontos,
+      metaCardioMinutos: userData.meta_cardio_minutos ?? 0,
+      minutosFaltantesCardio: userData.minutos_faltantes ?? 0,
       posicaoRanking: rankPosition,
+      admin: userData.admin === true,
     });
 
   } catch (error) {
@@ -305,7 +324,8 @@ router.get('/ranking', verifyJWT, async (req, res) => {
           u.id AS user_id,
           u.username,
           COALESCE(t.total_treinos, 0)::INTEGER AS treinos,
-          COALESCE(c.total_minutos, 0)::INTEGER AS minutos
+          COALESCE(c.total_minutos, 0)::INTEGER AS minutos,
+          COALESCE(c.total_pontos, 0)::INTEGER AS pontos
       FROM users u
       LEFT JOIN (
           SELECT user_id, COUNT(id) AS total_treinos
@@ -315,17 +335,18 @@ router.get('/ranking', verifyJWT, async (req, res) => {
       ) t ON t.user_id = u.id
       LEFT JOIN (
           SELECT user_id,
+                 SUM(duracao_min) AS total_minutos,
                  SUM(
                    CASE
                      WHEN lower(tipo) LIKE '%escada%' THEN duracao_min * 2
                      ELSE duracao_min
                    END
-                 ) AS total_minutos
+                 ) AS total_pontos
           FROM cardios
           WHERE DATE_TRUNC('week', data) = DATE_TRUNC('week', NOW())
           GROUP BY user_id
       ) c ON c.user_id = u.id
-      ORDER BY minutos DESC, treinos DESC;
+      ORDER BY pontos DESC, treinos DESC;
     `;
 
     const rankingComPosicao = rankingResult.map((item, index) => ({
@@ -334,6 +355,7 @@ router.get('/ranking', verifyJWT, async (req, res) => {
       username: item.username,
       treinos: item.treinos,
       minutos: item.minutos,
+      pontos: item.pontos,
     }));
 
     return res.json({ ranking: rankingComPosicao });
@@ -343,6 +365,171 @@ router.get('/ranking', verifyJWT, async (req, res) => {
     return res.status(500).json({ error: 'Erro interno ao carregar ranking.' });
   }
 });
+router.get('/trainer-athletes', verifyJWT, async (req, res) => {
+  if (!prisma) {
+    return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
+  }
+
+  if (req.user.admin !== true) {
+    return res.status(403).json({ error: 'Acesso restrito ao treinador.' });
+  }
+
+  try {
+    const athletes = await prisma.$queryRaw`
+      SELECT
+        u.id AS user_id,
+        u.username,
+        u.email,
+        COALESCE(t.total_treinos, 0)::INTEGER AS treinos,
+        COALESCE(c.total_minutos, 0)::INTEGER AS minutos,
+        COALESCE(u.cardio_meta_min, 0)::INTEGER AS meta_minutos,
+        GREATEST(COALESCE(u.cardio_meta_min, 0) - COALESCE(c.total_minutos, 0), 0)::INTEGER AS faltando_minutos
+      FROM users u
+      LEFT JOIN (
+        SELECT user_id, COUNT(id) AS total_treinos
+        FROM treinos
+        WHERE DATE_TRUNC('week', data) = DATE_TRUNC('week', NOW())
+        GROUP BY user_id
+      ) t ON t.user_id = u.id
+      LEFT JOIN (
+        SELECT user_id, SUM(duracao_min) AS total_minutos
+        FROM cardios
+        WHERE DATE_TRUNC('week', data) = DATE_TRUNC('week', NOW())
+        GROUP BY user_id
+      ) c ON c.user_id = u.id
+      WHERE u.admin = false
+      ORDER BY faltando_minutos DESC, u.username ASC;
+    `;
+
+    return res.json(athletes.map((athlete) => ({
+      user_id: typeof athlete.user_id === 'bigint' ? athlete.user_id.toString() : athlete.user_id,
+      username: athlete.username,
+      email: athlete.email,
+      treinos: Number(athlete.treinos || 0),
+      minutos: Number(athlete.minutos || 0),
+      meta_minutos: Number(athlete.meta_minutos || 0),
+      faltando_minutos: Number(athlete.faltando_minutos || 0),
+    })));
+  } catch (error) {
+    console.error('Erro ao buscar atletas do treinador:', error);
+    return res.status(500).json({ error: 'Erro interno ao carregar atletas.' });
+  }
+});
+
+router.get('/trainer-athletes/:id', verifyJWT, async (req, res) => {
+  if (!prisma) {
+    return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
+  }
+
+  if (req.user.admin !== true) {
+    return res.status(403).json({ error: 'Acesso restrito ao treinador.' });
+  }
+
+  try {
+    const athleteId = BigInt(req.params.id);
+
+    const athlete = await prisma.users.findUnique({
+      where: { id: athleteId },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        cardio_meta_min: true,
+      },
+    });
+
+    if (!athlete) {
+      return res.status(404).json({ error: 'Atleta não encontrado.' });
+    }
+
+    const [treinoMaisRecente] = await prisma.$queryRaw`
+      SELECT tipo, data
+      FROM treinos
+      WHERE user_id = ${athleteId}
+      ORDER BY data DESC
+      LIMIT 1;
+    `;
+
+    const [cardioMaisRecente] = await prisma.$queryRaw`
+      SELECT tipo, duracao_min, data, foto_url
+      FROM cardios
+      WHERE user_id = ${athleteId}
+      ORDER BY data DESC
+      LIMIT 1;
+    `;
+
+    const [weekSummary] = await prisma.$queryRaw`
+      SELECT COALESCE(SUM(duracao_min), 0)::INTEGER AS minutos_semana
+      FROM cardios
+      WHERE user_id = ${athleteId}
+        AND DATE_TRUNC('week', data) = DATE_TRUNC('week', NOW());
+    `;
+
+    const metaMinutos = Number(athlete.cardio_meta_min ?? 0);
+    const minutosSemana = Number(weekSummary?.minutos_semana ?? 0);
+    const minutosFaltantes = Math.max(metaMinutos - minutosSemana, 0);
+
+    return res.json({
+      user_id: athlete.id.toString(),
+      username: athlete.username,
+      email: athlete.email,
+      metaMinutos,
+      minutosSemana,
+      minutosFaltantes,
+      treinoMaisRecente: treinoMaisRecente ? {
+        data: new Date(treinoMaisRecente.data).toISOString(),
+        grupos: String(treinoMaisRecente.tipo || 'Sem grupo informado'),
+      } : null,
+      cardioMaisRecente: cardioMaisRecente ? {
+        tipo: cardioMaisRecente.tipo || 'Cardio',
+        duracao_min: Number(cardioMaisRecente.duracao_min || 0),
+        data: new Date(cardioMaisRecente.data).toISOString(),
+        foto_url: cardioMaisRecente.foto_url || null,
+      } : null,
+    });
+  } catch (error) {
+    console.error('Erro ao buscar dados do atleta:', error);
+    return res.status(500).json({ error: 'Erro interno ao carregar detalhes do atleta.' });
+  }
+});
+
+router.post('/athletes/:id/meta-cardio', verifyJWT, async (req, res) => {
+  if (!prisma) {
+    return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
+  }
+
+  if (req.user.admin !== true) {
+    return res.status(403).json({ error: 'Acesso restrito ao treinador.' });
+  }
+
+  try {
+    const athleteId = BigInt(req.params.id);
+    const metaMinutos = Number(req.body.meta_minutos || 0);
+
+    if (!Number.isFinite(metaMinutos) || metaMinutos < 0) {
+      return res.status(400).json({ error: 'Informe uma meta de minutos válida.' });
+    }
+
+    const athlete = await prisma.users.findUnique({ where: { id: athleteId } });
+    if (!athlete) {
+      return res.status(404).json({ error: 'Atleta não encontrado.' });
+    }
+
+    const updated = await prisma.users.update({
+      where: { id: athleteId },
+      data: { cardio_meta_min: metaMinutos },
+    });
+
+    return res.json({
+      user_id: updated.id.toString(),
+      metaMinutos: Number(updated.cardio_meta_min || 0),
+    });
+  } catch (error) {
+    console.error('Erro ao salvar meta de cardio:', error);
+    return res.status(500).json({ error: 'Erro interno ao salvar meta de cardio.' });
+  }
+});
+
 router.get('/profile-data', verifyJWT, async (req, res) => {
   if (!prisma) {
     return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
@@ -379,6 +566,88 @@ router.get('/profile-data', verifyJWT, async (req, res) => {
   } catch (error) {
     console.error('Erro ao buscar perfil do usuário:', error);
     return res.status(500).json({ error: 'Erro interno ao carregar perfil.' });
+  }
+});
+
+router.put('/profile-data', verifyJWT, async (req, res) => {
+  if (!prisma) {
+    return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
+  }
+
+  try {
+    const userId = req.user.id;
+    const currentUser = await prisma.users.findUnique({ where: { id: userId } });
+    if (!currentUser) {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+
+    const incomingUsername = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
+    const incomingEmail = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+
+    const nextUsername = incomingUsername || currentUser.username || '';
+    const nextEmail = incomingEmail || currentUser.email || '';
+
+    if (!nextUsername) {
+      return res.status(400).json({ error: 'Informe um nome de usuário válido.' });
+    }
+
+    if (!nextEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+      return res.status(400).json({ error: 'Informe um e-mail válido.' });
+    }
+
+    const hasAnyFieldChanged =
+      incomingUsername !== '' && incomingUsername !== (currentUser.username || '') ||
+      incomingEmail !== '' && incomingEmail !== (currentUser.email || '');
+
+    if (!hasAnyFieldChanged) {
+      return res.status(400).json({ error: 'Informe ao menos um campo para atualizar.' });
+    }
+
+    const usernameConflict = await prisma.users.findFirst({
+      where: {
+        username: {
+          equals: nextUsername,
+          mode: 'insensitive',
+        },
+        NOT: { id: userId },
+      },
+    });
+
+    if (usernameConflict) {
+      return res.status(409).json({ error: 'Este nome de usuário já está em uso.' });
+    }
+
+    const emailConflict = await prisma.users.findFirst({
+      where: {
+        email: {
+          equals: nextEmail,
+          mode: 'insensitive',
+        },
+        NOT: { id: userId },
+      },
+    });
+
+    if (emailConflict) {
+      return res.status(409).json({ error: 'Este e-mail já está em uso.' });
+    }
+
+    const updatedUser = await prisma.users.update({
+      where: { id: userId },
+      data: {
+        username: nextUsername,
+        email: nextEmail,
+      },
+    });
+
+    return res.json({
+      id: typeof updatedUser.id === 'bigint' ? updatedUser.id.toString() : updatedUser.id,
+      email: updatedUser.email,
+      username: updatedUser.username,
+      admin: updatedUser.admin,
+    });
+  } catch (error) {
+    console.error('Erro ao atualizar perfil do usuário:', error);
+    return res.status(500).json({ error: 'Erro interno ao salvar alterações do perfil.' });
   }
 });
 router.get('/health', (req, res) => {

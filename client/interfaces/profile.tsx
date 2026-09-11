@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   View, 
   Text, 
@@ -23,6 +23,9 @@ export default function ProfileScreen({ navigation, onLogout }: ProfileScreenPro
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const initialProfileRef = useRef({ username: '', email: '' });
 
   // Estados para controlar o Modal de Logout
   const [showLogoutModal, setShowLogoutModal] = useState(false);
@@ -32,8 +35,12 @@ export default function ProfileScreen({ navigation, onLogout }: ProfileScreenPro
     const loadProfile = async () => {
       try {
         const response = await api.get<ProfileData>('/profile-data');
-        setUsername(response.data.username);
-        setEmail(response.data.email);
+        const nextUsername = response.data.username || '';
+        const nextEmail = response.data.email || '';
+
+        setUsername(nextUsername);
+        setEmail(nextEmail);
+        initialProfileRef.current = { username: nextUsername, email: nextEmail };
       } catch (error) {
         console.error('Erro ao carregar perfil:', error);
       } finally {
@@ -44,8 +51,50 @@ export default function ProfileScreen({ navigation, onLogout }: ProfileScreenPro
     loadProfile();
   }, []);
 
-  const handleUpdate = () => {
-    Alert.alert('Sucesso', 'Perfil atualizado!');
+  const handleUpdate = async () => {
+    const trimmedUsername = username.trim();
+    const trimmedEmail = email.trim();
+    const originalUsername = initialProfileRef.current.username.trim();
+    const originalEmail = initialProfileRef.current.email.trim();
+
+    const hasUsernameChange = trimmedUsername !== originalUsername;
+    const hasEmailChange = trimmedEmail !== originalEmail;
+
+    if (!trimmedUsername) {
+      Alert.alert('Campo obrigatório', 'Informe um nome de usuário.');
+      return;
+    }
+
+    if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      Alert.alert('E-mail inválido', 'Informe um e-mail válido.');
+      return;
+    }
+
+    if (!hasUsernameChange && !hasEmailChange) {
+      Alert.alert('Nenhuma alteração', 'Atualize pelo menos um campo antes de salvar.');
+      return;
+    }
+
+    setIsSaving(true);
+
+    try {
+      await api.put('/profile-data', {
+        username: trimmedUsername,
+        email: trimmedEmail,
+      });
+
+      initialProfileRef.current = {
+        username: trimmedUsername,
+        email: trimmedEmail,
+      };
+
+      setShowSuccessModal(true);
+    } catch (error: any) {
+      const message = error?.response?.data?.error || 'Não foi possível salvar as alterações.';
+      Alert.alert('Erro ao atualizar', message);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // 1. Abre o modal de confirmação
@@ -94,8 +143,17 @@ export default function ProfileScreen({ navigation, onLogout }: ProfileScreenPro
         <TextInput style={styles.input} value={email} onChangeText={setEmail} keyboardType="email-address" />
 
         <View style={styles.actions}>
-          <TouchableOpacity style={styles.button} onPress={handleUpdate}>
-            <Text style={styles.buttonText}>Salvar Alterações</Text>
+          <TouchableOpacity
+            style={[styles.button, isSaving && styles.buttonDisabled]}
+            onPress={handleUpdate}
+            disabled={isSaving}
+            activeOpacity={0.85}
+          >
+            {isSaving ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <Text style={styles.buttonText}>Salvar Alterações</Text>
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogoutPress}>
@@ -103,6 +161,27 @@ export default function ProfileScreen({ navigation, onLogout }: ProfileScreenPro
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={showSuccessModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowSuccessModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Sucesso</Text>
+            <Text style={styles.modalSubtext}>Sua alteração foi salva com sucesso.</Text>
+
+            <TouchableOpacity
+              style={styles.modalConfirmButton}
+              onPress={() => setShowSuccessModal(false)}
+            >
+              <Text style={styles.modalConfirmText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* MODAL DE LOGOUT CUSTOMIZADO */}
       <Modal
@@ -163,7 +242,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   actions: { marginTop: 24, width: '100%' },
-  button: { backgroundColor: '#2563eb', padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 0 },
+  button: { backgroundColor: '#2563eb', padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 0, minHeight: 52 },
+  buttonDisabled: { opacity: 0.7 },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   logoutButton: { padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 12, borderWidth: 1, borderColor: '#ef4444' },
   logoutText: { color: '#ef4444', fontSize: 16, fontWeight: 'bold' },
@@ -217,7 +297,7 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 12,
     borderRadius: 10,
-    backgroundColor: '#ef4444',
+    backgroundColor: '#31ca0b',
     alignItems: 'center',
   },
   modalConfirmText: {
