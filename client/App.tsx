@@ -15,19 +15,19 @@ type LoginRouteProps = {
 };
 
 function LoginRoute({ navigation }: LoginRouteProps) {
-  return <LoginScreen navigation={navigation} onLoginSuccess={() => navigation.replace('MainApp')} />;
+  return <LoginScreen navigation={navigation} onLoginSuccess={() => navigation.replace('Gym Files')} />;
 }
 
 export default function App() {
   const [isLoading, setIsLoading] = useState(true);
-  const [initialRoute, setInitialRoute] = useState<'Login' | 'MainApp'>('Login');
+  const [initialRoute, setInitialRoute] = useState<'Login' | 'Gym Files'>('Login');
 
   useEffect(() => {
     async function checkAuth() {
       try {
         const token = await AsyncStorage.getItem('authToken');
         if (token) {
-          setInitialRoute('MainApp');
+          setInitialRoute('Gym Files');
         }
       } catch (error) {
         console.error('Erro ao verificar autenticação:', error);
@@ -54,7 +54,7 @@ export default function App() {
         screenOptions={{ headerShown: false }}
       >
         <Stack.Screen name="Login" component={LoginRoute} />
-        <Stack.Screen name="MainApp" component={AppNavigator} />
+        <Stack.Screen name="Gym Files" component={AppNavigator} />
       </Stack.Navigator>
     </NavigationContainer>
   );
