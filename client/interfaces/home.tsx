@@ -14,10 +14,19 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../services/api';
+import {
+  CardioSuggestionResponse,
+  CardioSuggestionState,
+  requestCardioSuggestion,
+  subscribeToCardioSuggestions,
+} from '../services/cardio-suggestions';
 import { DashboardData, TrainerAthleteDetail, TrainerAthleteSummary } from './types';
 
 export default function HomeScreen() {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [cardioSuggestion, setCardioSuggestion] = useState<CardioSuggestionResponse | null>(null);
+  const [loadingSuggestion, setLoadingSuggestion] = useState(false);
+  const [suggestionError, setSuggestionError] = useState(false);
   const [athletes, setAthletes] = useState<TrainerAthleteSummary[]>([]);
   const [selectedAthlete, setSelectedAthlete] = useState<TrainerAthleteDetail | null>(null);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -40,6 +49,13 @@ export default function HomeScreen() {
       const response = await api.get<DashboardData>('/dashboard');
       setDashboardData(response.data);
       setViewMode(response.data?.admin === true ? viewMode : 'athlete');
+
+      const weeklyGoal = Number(response.data?.metaCardioMinutos ?? 0);
+      if (response.data?.admin !== true && weeklyGoal > 0) {
+        void requestCardioSuggestion(weeklyGoal).catch((error) => {
+          console.warn('Erro ao carregar sugestão de cardio:', error);
+        });
+      }
     } catch (error) {
       console.error('Erro ao carregar dashboard:', error);
     } finally {
@@ -106,6 +122,19 @@ export default function HomeScreen() {
 
   useEffect(() => {
     loadDashboard();
+  }, []);
+
+  useEffect(() => {
+    const handleSuggestionState = (state: CardioSuggestionState) => {
+      setLoadingSuggestion(state.status === 'loading');
+      setSuggestionError(state.status === 'error');
+
+      if (state.status === 'ready') {
+        setCardioSuggestion(state.suggestion);
+      }
+    };
+
+    return subscribeToCardioSuggestions(handleSuggestionState);
   }, []);
 
   useEffect(() => {
@@ -195,6 +224,44 @@ export default function HomeScreen() {
                 </View>
               </View>
               <Text style={styles.rankBadge}>#{dashboardData?.posicaoRanking ?? 0}º Lugar</Text>
+            </View>
+
+            <View style={styles.suggestionPanel}>
+              <View style={styles.suggestionHeader}>
+                <View style={styles.suggestionTitleGroup}>
+                  <Ionicons name="sparkles-outline" size={21} color="#0f766e" />
+                  <Text style={styles.suggestionTitle}>Sugestão de cardio</Text>
+                </View>
+                {loadingSuggestion && <ActivityIndicator size="small" color="#0f766e" />}
+              </View>
+
+              {loadingSuggestion ? (
+                <Text style={styles.suggestionHint}>Montando seu plano para esta semana...</Text>
+              ) : suggestionError ? (
+                <Text style={styles.suggestionHint}>Não foi possível carregar a sugestão agora.</Text>
+              ) : cardioSuggestion ? (
+                <>
+                  <Text style={styles.suggestionMotivation}>
+                    {cardioSuggestion.dados.mensagem_motivacional}
+                  </Text>
+                  {cardioSuggestion.dados.sugestoes_diarias.length === 0 ? (
+                    <Text style={styles.suggestionHint}>Sua meta semanal foi concluída.</Text>
+                  ) : (
+                    cardioSuggestion.dados.sugestoes_diarias.map((item, index) => (
+                      <View key={`${item.dia}-${index}`} style={styles.suggestionItem}>
+                        <Text style={styles.suggestionDay}>
+                          {item.dia} · {item.minutos_sugeridos} min
+                        </Text>
+                        <Text style={styles.suggestionReason}>{item.motivo}</Text>
+                      </View>
+                    ))
+                  )}
+                </>
+              ) : (
+                <Text style={styles.suggestionHint}>
+                  Defina uma meta semanal para receber sugestões personalizadas.
+                </Text>
+              )}
             </View>
           </>
         ) : (
@@ -375,6 +442,27 @@ const styles = StyleSheet.create({
   rankingTitle: { fontSize: 16, fontWeight: 'bold', color: '#0f172a' },
   rankingSub: { fontSize: 12, color: '#64748b' },
   rankBadge: { fontSize: 20, fontWeight: 'bold', color: '#eab308' },
+  suggestionPanel: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#a7f3d0',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 18,
+  },
+  suggestionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  suggestionTitleGroup: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  suggestionTitle: { fontSize: 16, fontWeight: '700', color: '#115e59' },
+  suggestionMotivation: { color: '#134e4a', fontSize: 14, fontWeight: '600', marginBottom: 8 },
+  suggestionHint: { color: '#475569', fontSize: 13 },
+  suggestionItem: { paddingTop: 10, borderTopWidth: 1, borderTopColor: '#ccefe3', marginTop: 8 },
+  suggestionDay: { color: '#0f172a', fontSize: 14, fontWeight: '700' },
+  suggestionReason: { color: '#475569', fontSize: 13, marginTop: 3 },
   trainerPanel: { backgroundColor: '#fff', borderRadius: 16, padding: 16 },
   sectionTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a', marginBottom: 12 },
   athleteItem: {

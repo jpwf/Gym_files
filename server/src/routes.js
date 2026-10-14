@@ -7,6 +7,7 @@ const validateLogin = require('./middleware/validateLogin');
 const verifyJWT = require('./middleware/verifyJWT'); 
 const path = require('path');
 const { supabase } = require('./services/supabase-storage');
+const { obterSugestaoCardio } = require('./services/ia-suggestions');
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -115,6 +116,8 @@ router.post('/auth/google', async (req, res) => {
     return res.status(401).json({ error: 'Token do Google inválido ou expirado.' });
   }
 });
+
+router.post('/cardio/sugestao', verifyJWT, obterSugestaoCardio);
 
 router.post('/login', validateLogin, async (req, res) => {
   const { email, password, username } = req.body;

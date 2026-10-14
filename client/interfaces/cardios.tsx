@@ -12,6 +12,8 @@ import {
   Modal
 } from 'react-native';
 import { api } from '../services/api';
+import { requestCardioSuggestion } from '../services/cardio-suggestions';
+import { DashboardData } from './types';
 
 export default function CardiosScreen() {
   const [minutes, setMinutes] = useState('');
@@ -104,6 +106,19 @@ export default function CardiosScreen() {
 
       setSuccessMessage(`${minutes} min de ${selectedType} registrados!`);
       setShowSuccessModal(true);
+
+      void (async () => {
+        try {
+          const dashboardResponse = await api.get<DashboardData>('/dashboard');
+          const weeklyGoal = Number(dashboardResponse.data?.metaCardioMinutos ?? 0);
+
+          if (dashboardResponse.data?.admin !== true && weeklyGoal > 0) {
+            await requestCardioSuggestion(weeklyGoal);
+          }
+        } catch (suggestionError) {
+          console.warn('Erro ao atualizar sugestão após registrar cardio:', suggestionError);
+        }
+      })();
 
       setMinutes('');
       setPhotoFile(null);
