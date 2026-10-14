@@ -26,7 +26,7 @@ export default function CardiosScreen() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const cardioTypes = ['Esteira', 'Corrida Rua', 'Bicicleta', 'Escada', 'Natação'];
+  const cardioTypes = ['Esteira', 'Corrida Rua', 'Bicicleta', 'Escada', 'Esporte', 'Caminhada'];
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

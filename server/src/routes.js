@@ -2,10 +2,13 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const { OAuth2Client } = require('google-auth-library');
 const validateLogin = require('./middleware/validateLogin');
 const verifyJWT = require('./middleware/verifyJWT'); 
 const path = require('path');
 const { supabase } = require('./services/supabase-storage');
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const PIPEFY_TOKEN = process.env.PIPEFYKEY;
 const ORG_ID = process.env.PIPEFY_ORG_ID;
@@ -18,6 +21,100 @@ try {
   console.error('ERRO AO INICIALIZAR O PRISMA:', e.message);
 }
 
+
+router.post('/auth/google', async (req, res) => {
+  if (!prisma) {
+    return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
+  }
+
+  try {
+    const { idToken, nonce } = req.body || {};
+
+    if (!idToken) {
+      return res.status(400).json({ error: 'idToken do Google não informado.' });
+    }
+
+    if (typeof nonce !== 'string' || !nonce) {
+      return res.status(400).json({ error: 'Nonce da autenticação Google não informado.' });
+    }
+
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      if (!process.env.GOOGLE_CLIENT_IDS) {
+        return res.status(500).json({ error: 'Configure GOOGLE_CLIENT_IDS no servidor.' });
+      }
+    }
+
+    const acceptedGoogleClientIds = [
+      process.env.GOOGLE_CLIENT_ID,
+      ...(process.env.GOOGLE_CLIENT_IDS || '').split(','),
+    ].map((clientId) => clientId.trim()).filter(Boolean);
+
+    if (acceptedGoogleClientIds.length === 0) {
+      return res.status(500).json({ error: 'Configure GOOGLE_CLIENT_IDS no servidor.' });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: acceptedGoogleClientIds,
+    });
+
+    const payload = ticket.getPayload();
+    const email = payload?.email;
+
+    if (payload?.nonce !== nonce) {
+      return res.status(401).json({ error: 'Nonce do token Google inválido.' });
+    }
+
+    if (!email || payload?.email_verified !== true) {
+      return res.status(401).json({ error: 'O Google não confirmou o e-mail desta conta.' });
+    }
+
+    let user = await prisma.users.findFirst({
+      where: {
+        email: {
+          equals: email,
+          mode: 'insensitive',
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(403).json({
+        error: 'Este e-mail não está cadastrado. Solicite ao treinador o cadastro da sua conta.',
+        reason: 'USER_NOT_REGISTERED',
+      });
+    }
+
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      console.error('ERRO CRÍTICO: JWT_SECRET não definida no ambiente (.env)');
+      return res.status(500).json({ error: 'Erro de configuração no servidor' });
+    }
+
+    const appToken = jwt.sign(
+      {
+        id: String(user.id),
+        email: user.email,
+        admin: user.admin === true,
+      },
+      jwtSecret,
+      { expiresIn: '3h' }
+    );
+
+    return res.json({
+      token: appToken,
+      user: {
+        id: String(user.id),
+        email: user.email,
+        username: user.username,
+        admin: user.admin === true,
+      },
+    });
+  } catch (error) {
+    console.error('Erro ao autenticar com Google:', error);
+    return res.status(401).json({ error: 'Token do Google inválido ou expirado.' });
+  }
+});
 
 router.post('/login', validateLogin, async (req, res) => {
   const { email, password, username } = req.body;
@@ -150,6 +247,7 @@ router.get('/dashboard', verifyJWT, async (req, res) => {
                  SUM(
                    CASE
                      WHEN lower(tipo) LIKE '%escada%' THEN duracao_min * 2
+                     WHEN lower(tipo) LIKE '%caminhada%' THEN duracao_min * 0.5
                      ELSE duracao_min
                    END
                  ) AS total_pontos
