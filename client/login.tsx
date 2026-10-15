@@ -29,8 +29,8 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
   const [loginError, setLoginError] = useState('');
   const [googleNonce] = useState(() => Crypto.randomUUID());
   const googleClientId = Platform.select({
-    ios: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
-    android: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
+    ios: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+    android: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
     default: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
   });
   const redirectUri = Platform.OS === 'web'
