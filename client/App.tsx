@@ -2,11 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import LoginScreen from './login';
 import AppNavigator from './navigator';
 import { navigationRef } from './navigation';
+import { getAuthToken } from './services/auth-storage';
 
 const Stack = createNativeStackNavigator();
 
@@ -25,7 +25,7 @@ export default function App() {
   useEffect(() => {
     async function checkAuth() {
       try {
-        const token = await AsyncStorage.getItem('authToken');
+        const token = await getAuthToken();
         if (token) {
           setInitialRoute('Gym Files');
         }

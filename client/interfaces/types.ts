@@ -57,4 +57,6 @@ export interface ProfileData {
   username: string;
   createdAt: string;
   admin: boolean;
+  is_admin: boolean;
+  is_root: boolean;
 }

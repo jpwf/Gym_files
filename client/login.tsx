@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { FontAwesome } from '@expo/vector-icons';
 import { makeRedirectUri, ResponseType, useAuthRequest } from 'expo-auth-session';
 import * as Crypto from 'expo-crypto';
@@ -14,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import { api } from './services/api';
+import { setAuthToken } from './services/auth-storage';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -46,7 +46,7 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
   );
 
   async function completeLogin(token: string) {
-    await AsyncStorage.setItem('authToken', token);
+    await setAuthToken(token);
 
     if (onLoginSuccess) {
       onLoginSuccess();

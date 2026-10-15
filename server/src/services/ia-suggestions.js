@@ -91,6 +91,17 @@ function filterAllowedCardioDays(suggestion, allowedDays) {
   };
 }
 
+async function removeCardioSuggestionCache(userId) {
+  const { error } = await getSupabaseClient()
+    .from('ai_cache_sugestoes_app')
+    .delete()
+    .eq('app_user_id', String(userId));
+
+  if (error) {
+    throw new Error(`Erro ao remover cache do usuário: ${error.message}`);
+  }
+}
+
 const obterSugestaoCardio = async (req, res) => {
   try {
     const { meta_semanal } = req.body || {};
@@ -249,4 +260,4 @@ const obterSugestaoCardio = async (req, res) => {
   }
 };
 
-module.exports = { obterSugestaoCardio };
+module.exports = { obterSugestaoCardio, removeCardioSuggestionCache };

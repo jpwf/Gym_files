@@ -1,6 +1,6 @@
 import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { navigateToLogin } from '../navigation';
+import { getAuthToken, removeAuthToken } from './auth-storage';
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_URL;
 
@@ -15,7 +15,7 @@ const publicAuthEndpoints = ['/login', '/auth/google'];
 
 api.interceptors.request.use(
   async (config) => {
-    const token = await AsyncStorage.getItem('authToken');
+    const token = await getAuthToken();
     const isPublicAuthEndpoint = publicAuthEndpoints.includes(config.url || '');
 
     if (!token && !isPublicAuthEndpoint) {
@@ -38,7 +38,7 @@ api.interceptors.response.use(
     const isPublicAuthEndpoint = publicAuthEndpoints.includes(error.config?.url || '');
 
     if (!isPublicAuthEndpoint && (error.response?.status === 401 || error.response?.status === 403)) {
-      await AsyncStorage.removeItem('authToken');
+      await removeAuthToken();
       navigateToLogin();
     }
 
