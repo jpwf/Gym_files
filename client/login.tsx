@@ -33,10 +33,13 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
     android: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
     default: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
   });
+  const redirectUri = Platform.OS === 'web'
+    ? window.location.origin
+    : makeRedirectUri({ scheme: 'gymfiles', path: 'oauth2redirect' });
   const [googleRequest, , promptGoogleLogin] = useAuthRequest(
     {
       clientId: googleClientId || '',
-      redirectUri: makeRedirectUri({ scheme: 'gymfiles', path: 'oauth2redirect' }),
+      redirectUri,
       responseType: ResponseType.IdToken,
       scopes: ['openid', 'profile', 'email'],
       usePKCE: false,
