@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import LoginScreen from './login';
 import AppDashboard from './App';
+import { getAuthToken } from './services/auth-storage';
 
 export default function App() {
   const [showLogin, setShowLogin] = useState(false);
@@ -13,7 +13,7 @@ export default function App() {
 
   useEffect(() => {
     const checkAuth = async () => {
-      const token = await AsyncStorage.getItem('authToken');
+      const token = await getAuthToken();
       setIsAuthenticated(Boolean(token));
       setLoading(false);
     };

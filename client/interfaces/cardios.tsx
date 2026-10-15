@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   View, 
   Text, 
@@ -12,6 +12,8 @@ import {
   Modal
 } from 'react-native';
 import { api } from '../services/api';
+import { requestCardioSuggestion } from '../services/cardio-suggestions';
+import { DashboardData } from './types';
 
 export default function CardiosScreen() {
   const [minutes, setMinutes] = useState('');
@@ -25,23 +27,23 @@ export default function CardiosScreen() {
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const photoPreviewUrlRef = useRef<string | null>(null);
 
-  const cardioTypes = ['Esteira', 'Corrida Rua', 'Bicicleta', 'Escada', 'Natação'];
+  useEffect(() => () => {
+    if (photoPreviewUrlRef.current) {
+      URL.revokeObjectURL(photoPreviewUrlRef.current);
+    }
+  }, []);
+
+  const cardioTypes = ['Esteira', 'Corrida Rua', 'Bicicleta', 'Escada', 'Esporte', 'Caminhada'];
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const fileName = file.name.toLowerCase();
-    const isBlockedExtension = fileName.endsWith('.gif');
-
-    if (!file.type.startsWith('image/')) {
-      Alert.alert('Arquivo inválido', 'Selecione apenas arquivos de imagem.');
-      return;
-    }
-
-    if (isBlockedExtension) {
-      Alert.alert('Arquivo não permitido', 'Este tipo de arquivo não pode ser enviado.');
+    const allowedImageTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowedImageTypes.includes(file.type)) {
+      Alert.alert('Arquivo inválido', 'Use uma imagem JPEG, PNG ou WebP.');
       return;
     }
 
@@ -51,7 +53,12 @@ export default function CardiosScreen() {
     }
 
     setPhotoFile(file);
-    setPhotoPreview(URL.createObjectURL(file));
+    if (photoPreviewUrlRef.current) {
+      URL.revokeObjectURL(photoPreviewUrlRef.current);
+    }
+    const previewUrl = URL.createObjectURL(file);
+    photoPreviewUrlRef.current = previewUrl;
+    setPhotoPreview(previewUrl);
   };
 
   const triggerFilePicker = (mode: 'camera' | 'gallery' = 'gallery') => {
@@ -105,8 +112,25 @@ export default function CardiosScreen() {
       setSuccessMessage(`${minutes} min de ${selectedType} registrados!`);
       setShowSuccessModal(true);
 
+      void (async () => {
+        try {
+          const dashboardResponse = await api.get<DashboardData>('/dashboard');
+          const weeklyGoal = Number(dashboardResponse.data?.metaCardioMinutos ?? 0);
+
+          if (dashboardResponse.data?.admin !== true && weeklyGoal > 0) {
+            await requestCardioSuggestion(weeklyGoal, true);
+          }
+        } catch (suggestionError) {
+          console.warn('Erro ao atualizar sugestão após registrar cardio:', suggestionError);
+        }
+      })();
+
       setMinutes('');
       setPhotoFile(null);
+      if (photoPreviewUrlRef.current) {
+        URL.revokeObjectURL(photoPreviewUrlRef.current);
+        photoPreviewUrlRef.current = null;
+      }
       setPhotoPreview(null);
     } catch (error: any) {
       const message = error?.response?.data?.error || 'Não foi possível salvar o cardio.';
@@ -153,7 +177,7 @@ export default function CardiosScreen() {
 
         <input
           type="file"
-          accept="image/*"
+          accept="image/jpeg,image/png,image/webp"
           ref={fileInputRef}
           onChange={handleFileChange}
           style={{ display: 'none' }}

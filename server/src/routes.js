@@ -2,10 +2,18 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const { rateLimit } = require('express-rate-limit');
+const { OAuth2Client } = require('google-auth-library');
 const validateLogin = require('./middleware/validateLogin');
 const verifyJWT = require('./middleware/verifyJWT'); 
-const path = require('path');
-const { supabase } = require('./services/supabase-storage');
+const {
+  createCardioProofSignedUrl,
+  removeCardioProofFiles,
+  uploadCardioProof,
+} = require('./services/supabase-storage');
+const { obterSugestaoCardio, removeCardioSuggestionCache } = require('./services/ia-suggestions');
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const PIPEFY_TOKEN = process.env.PIPEFYKEY;
 const ORG_ID = process.env.PIPEFY_ORG_ID;
@@ -18,8 +26,134 @@ try {
   console.error('ERRO AO INICIALIZAR O PRISMA:', e.message);
 }
 
+function requireRoot(req, res, next) {
+  if (req.user?.is_root !== true) {
+    return res.status(403).json({ error: 'Acesso restrito ao usuário root.' });
+  }
 
-router.post('/login', validateLogin, async (req, res) => {
+  return next();
+}
+
+const loginRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Muitas tentativas de acesso. Aguarde antes de tentar novamente.' },
+});
+
+const googleAuthRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Muitas tentativas de autenticação. Aguarde antes de tentar novamente.' },
+});
+
+const cardioSuggestionRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 6,
+  keyGenerator: (req) => `user:${req.user.id}`,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Limite de sugestões atingido. Tente novamente mais tarde.' },
+});
+
+
+router.post('/auth/google', googleAuthRateLimit, async (req, res) => {
+  if (!prisma) {
+    return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
+  }
+
+  try {
+    const { idToken, nonce } = req.body || {};
+
+    if (!idToken) {
+      return res.status(400).json({ error: 'idToken do Google não informado.' });
+    }
+
+    if (typeof nonce !== 'string' || !nonce) {
+      return res.status(400).json({ error: 'Nonce da autenticação Google não informado.' });
+    }
+
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      if (!process.env.GOOGLE_CLIENT_IDS) {
+        return res.status(500).json({ error: 'Configure GOOGLE_CLIENT_IDS no servidor.' });
+      }
+    }
+
+    const acceptedGoogleClientIds = [
+      process.env.GOOGLE_CLIENT_ID,
+      ...(process.env.GOOGLE_CLIENT_IDS || '').split(','),
+    ].map((clientId) => clientId.trim()).filter(Boolean);
+
+    if (acceptedGoogleClientIds.length === 0) {
+      return res.status(500).json({ error: 'Configure GOOGLE_CLIENT_IDS no servidor.' });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: acceptedGoogleClientIds,
+    });
+
+    const payload = ticket.getPayload();
+    const email = payload?.email;
+
+    if (payload?.nonce !== nonce) {
+      return res.status(401).json({ error: 'Nonce do token Google inválido.' });
+    }
+
+    if (!email || payload?.email_verified !== true) {
+      return res.status(401).json({ error: 'O Google não confirmou o e-mail desta conta.' });
+    }
+
+    let user = await prisma.users.findFirst({
+      where: {
+        email: {
+          equals: email,
+          mode: 'insensitive',
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(401).json({ error: 'Não foi possível autenticar com essa conta.' });
+    }
+
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      console.error('ERRO CRÍTICO: JWT_SECRET não definida no ambiente (.env)');
+      return res.status(500).json({ error: 'Erro de configuração no servidor' });
+    }
+
+    const appToken = jwt.sign(
+      {
+        id: String(user.id),
+        email: user.email,
+        admin: user.admin === true,
+      },
+      jwtSecret,
+      { expiresIn: '3h' }
+    );
+
+    return res.json({
+      token: appToken,
+      user: {
+        id: String(user.id),
+        email: user.email,
+        username: user.username,
+        admin: user.admin === true,
+      },
+    });
+  } catch (error) {
+    console.error('Erro ao autenticar com Google:', error?.code || error?.status);
+    return res.status(401).json({ error: 'Não foi possível autenticar com essa conta.' });
+  }
+});
+
+router.post('/cardio/sugestao', verifyJWT, cardioSuggestionRateLimit, obterSugestaoCardio);
+
+router.post('/login', loginRateLimit, validateLogin, async (req, res) => {
   const { email, password, username } = req.body;
 
   if (!prisma) {
@@ -51,11 +185,8 @@ router.post('/login', validateLogin, async (req, res) => {
     }
 
     if (!user) {
-      console.log(`[LOGIN FAILED] Usuário "${loginIdentifier}" não foi encontrado no banco.`);
-      return res.status(401).json({
-        message: 'Acesso ou senha incorretas',
-        reason: 'USER_NOT_FOUND'
-      });
+      console.warn('[LOGIN FAILED] Credenciais inválidas.');
+      return res.status(401).json({ message: 'Acesso ou senha incorretos.' });
     }
 
     const storedPassword = user.secretkey || user.password_hash;
@@ -79,11 +210,8 @@ router.post('/login', validateLogin, async (req, res) => {
     }
 
     if (!validPassword) {
-      console.log(`[LOGIN FAILED] Senha incorreta para o usuário "${user.email || user.username}".`);
-      return res.status(401).json({
-        message: 'Acesso ou senha incorretas',
-        reason: 'INVALID_PASSWORD'
-      });
+      console.warn('[LOGIN FAILED] Credenciais inválidas.');
+      return res.status(401).json({ message: 'Acesso ou senha incorretos.' });
     }
 
     const jwtSecret = process.env.JWT_SECRET;
@@ -150,6 +278,7 @@ router.get('/dashboard', verifyJWT, async (req, res) => {
                  SUM(
                    CASE
                      WHEN lower(tipo) LIKE '%escada%' THEN duracao_min * 2
+                     WHEN lower(tipo) LIKE '%caminhada%' THEN duracao_min * 0.5
                      ELSE duracao_min
                    END
                  ) AS total_pontos
@@ -210,29 +339,7 @@ router.post('/cardios', verifyJWT, upload.single('foto'), async (req, res) => {
       return res.status(400).json({ error: 'Informe o tipo de cardio e a duração em minutos.' });
     }
 
-    // --- ENVIAR PARA O SUPABASE STORAGE ---
-    const fileExt = path.extname(req.file.originalname) || '.jpg';
-    const fileName = `cardio-${userId}-${Date.now()}${fileExt}`;
-
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('comprovantes-cardio') // Nome do seu Bucket no Supabase
-      .upload(fileName, req.file.buffer, {
-        contentType: req.file.mimetype,
-        upsert: true,
-      });
-
-    if (uploadError) {
-      console.error('Erro no Supabase Storage:', uploadError);
-      return res.status(500).json({ error: 'Falha ao salvar a imagem na nuvem.' });
-    }
-
-    // Pega a URL pública gerada no Supabase Storage
-    const { data: publicUrlData } = supabase.storage
-      .from('comprovantes-cardio')
-      .getPublicUrl(fileName);
-
-    const foto_url = publicUrlData.publicUrl;
-    // -------------------------------------
+    const foto_url = await uploadCardioProof(userId, req.file.buffer);
 
     const cardioDate = data ? new Date(data) : new Date();
 
@@ -258,7 +365,10 @@ router.post('/cardios', verifyJWT, upload.single('foto'), async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Erro ao inserir cardio:', error);
+    if (error.statusCode === 415) {
+      return res.status(415).json({ error: error.message });
+    }
+    console.error('Erro ao inserir cardio:', error.message);
     return res.status(500).json({ error: 'Erro interno ao salvar cardio.' });
   }
 });
@@ -457,6 +567,9 @@ router.get('/trainer-athletes/:id', verifyJWT, async (req, res) => {
       ORDER BY data DESC
       LIMIT 1;
     `;
+    const cardioFotoUrl = cardioMaisRecente?.foto_url
+      ? await createCardioProofSignedUrl(cardioMaisRecente.foto_url)
+      : null;
 
     const [weekSummary] = await prisma.$queryRaw`
       SELECT COALESCE(SUM(duracao_min), 0)::INTEGER AS minutos_semana
@@ -484,7 +597,7 @@ router.get('/trainer-athletes/:id', verifyJWT, async (req, res) => {
         tipo: cardioMaisRecente.tipo || 'Cardio',
         duracao_min: Number(cardioMaisRecente.duracao_min || 0),
         data: new Date(cardioMaisRecente.data).toISOString(),
-        foto_url: cardioMaisRecente.foto_url || null,
+        foto_url: cardioFotoUrl,
       } : null,
     });
   } catch (error) {
@@ -530,6 +643,152 @@ router.post('/athletes/:id/meta-cardio', verifyJWT, async (req, res) => {
   }
 });
 
+router.get('/root/users', verifyJWT, requireRoot, async (req, res) => {
+  if (!prisma) {
+    return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
+  }
+
+  try {
+    const users = await prisma.users.findMany({
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        admin: true,
+        is_root: true,
+        added: true,
+      },
+      orderBy: { added: 'desc' },
+    });
+
+    return res.json(users.map((user) => ({
+      id: user.id.toString(),
+      username: user.username,
+      email: user.email,
+      is_admin: user.admin === true,
+      is_root: user.is_root === true,
+      createdAt: user.added,
+    })));
+  } catch (error) {
+    console.error('Erro ao listar usuários para root:', error.message);
+    return res.status(500).json({ error: 'Não foi possível carregar os usuários.' });
+  }
+});
+
+router.post('/root/users', verifyJWT, requireRoot, async (req, res) => {
+  if (!prisma) {
+    return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
+  }
+
+  try {
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const password = req.body?.password;
+    const isAdmin = req.body?.is_admin === true;
+
+    if (!username || username.length > 80) {
+      return res.status(400).json({ error: 'Informe um nome de usuário de até 80 caracteres.' });
+    }
+
+    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Informe um e-mail válido.' });
+    }
+
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({ error: 'A senha deve ter pelo menos 8 caracteres.' });
+    }
+
+    const existingUser = await prisma.users.findFirst({
+      where: {
+        OR: [
+          { email: { equals: email, mode: 'insensitive' } },
+          { username: { equals: username, mode: 'insensitive' } },
+        ],
+      },
+      select: { email: true, username: true },
+    });
+
+    if (existingUser) {
+      return res.status(409).json({ error: 'Este e-mail ou nome de usuário já está em uso.' });
+    }
+
+    const secretkey = await bcrypt.hash(password, 10);
+    const user = await prisma.users.create({
+      data: {
+        username,
+        email,
+        secretkey,
+        admin: isAdmin,
+        is_root: false,
+      },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        admin: true,
+        is_root: true,
+        added: true,
+      },
+    });
+
+    return res.status(201).json({
+      id: user.id.toString(),
+      username: user.username,
+      email: user.email,
+      is_admin: user.admin === true,
+      is_root: user.is_root === true,
+      createdAt: user.added,
+    });
+  } catch (error) {
+    if (error.code === 'P2002') {
+      return res.status(409).json({ error: 'Este e-mail já está em uso.' });
+    }
+
+    console.error('Erro ao criar usuário para root:', error.message);
+    return res.status(500).json({ error: 'Não foi possível criar o usuário.' });
+  }
+});
+
+router.delete('/root/users/:id', verifyJWT, requireRoot, async (req, res) => {
+  if (!prisma) {
+    return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
+  }
+
+  let targetId;
+  try {
+    targetId = BigInt(req.params.id);
+  } catch {
+    return res.status(400).json({ error: 'ID de usuário inválido.' });
+  }
+
+  if (targetId.toString() === String(req.user.id)) {
+    return res.status(409).json({ error: 'Não é permitido remover a própria conta.' });
+  }
+
+  try {
+    const target = await prisma.users.findUnique({
+      where: { id: targetId },
+      select: { id: true, is_root: true },
+    });
+
+    if (!target) {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+
+    if (target.is_root === true) {
+      return res.status(403).json({ error: 'Não é permitido remover outra conta root.' });
+    }
+
+    await removeCardioSuggestionCache(target.id);
+    await removeCardioProofFiles(target.id);
+    await prisma.users.delete({ where: { id: targetId } });
+    return res.json({ message: 'Usuário removido com sucesso.' });
+  } catch (error) {
+    console.error('Erro ao remover usuário para root:', error.message);
+    return res.status(500).json({ error: 'Não foi possível remover o usuário.' });
+  }
+});
+
 router.get('/profile-data', verifyJWT, async (req, res) => {
   if (!prisma) {
     return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
@@ -546,6 +805,7 @@ router.get('/profile-data', verifyJWT, async (req, res) => {
         username: true,
         added: true,
         admin: true,
+        is_root: true,
       },
     });
 
@@ -561,6 +821,8 @@ router.get('/profile-data', verifyJWT, async (req, res) => {
       username: user.username,
       createdAt: user.added,
       admin: user.admin,
+      is_admin: user.admin === true,
+      is_root: user.is_root === true,
     });
 
   } catch (error) {
@@ -644,6 +906,8 @@ router.put('/profile-data', verifyJWT, async (req, res) => {
       email: updatedUser.email,
       username: updatedUser.username,
       admin: updatedUser.admin,
+      is_admin: updatedUser.admin === true,
+      is_root: updatedUser.is_root === true,
     });
   } catch (error) {
     console.error('Erro ao atualizar perfil do usuário:', error);

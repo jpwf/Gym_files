@@ -12,6 +12,8 @@ import {
   Modal 
 } from 'react-native';
 import { api } from '../services/api';
+import { navigateToLogin } from '../navigation';
+import { removeAuthToken } from '../services/auth-storage';
 import { ProfileData } from './types';
 
 type ProfileScreenProps = {
@@ -103,9 +105,8 @@ export default function ProfileScreen({ navigation, onLogout }: ProfileScreenPro
   };
 
   // 2. Limpa a autenticação, aguarda 2s no modal e dispara a alteração de estado para o App.tsx
-  const confirmLogout = () => {
-    // Limpa o token do localStorage
-    localStorage.removeItem('authToken');
+  const confirmLogout = async () => {
+    await removeAuthToken();
     setIsLoggingOut(true);
 
     // Delay de 2 segundos antes de desmontar o perfil/voltar pro App.tsx
@@ -115,10 +116,8 @@ export default function ProfileScreen({ navigation, onLogout }: ProfileScreenPro
 
       if (onLogout) {
         onLogout(); // Notifica o App.tsx para trocar a tela
-      } else if (navigation?.navigate) {
-        navigation.navigate('Login'); // Se usar navegação por props customizada
       } else {
-        window.location.reload(); // Fallback caso queira forçar o reset do estado global
+        navigateToLogin();
       }
     }, 2000);
   };
