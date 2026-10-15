@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   View, 
   Text, 
@@ -12,6 +12,8 @@ import {
   Modal
 } from 'react-native';
 import { api } from '../services/api';
+import { requestCardioSuggestion } from '../services/cardio-suggestions';
+import { DashboardData } from './types';
 
 export default function CardiosScreen() {
   const [minutes, setMinutes] = useState('');
@@ -19,28 +21,29 @@ export default function CardiosScreen() {
   const [loading, setLoading] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [showSourceModal, setShowSourceModal] = useState(false);
 
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const photoPreviewUrlRef = useRef<string | null>(null);
 
-  const cardioTypes = ['Esteira', 'Corrida Rua', 'Bicicleta', 'Escada', 'Natação'];
+  useEffect(() => () => {
+    if (photoPreviewUrlRef.current) {
+      URL.revokeObjectURL(photoPreviewUrlRef.current);
+    }
+  }, []);
+
+  const cardioTypes = ['Esteira', 'Corrida Rua', 'Bicicleta', 'Escada', 'Esporte', 'Caminhada'];
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const fileName = file.name.toLowerCase();
-    const isBlockedExtension = fileName.endsWith('.gif');
-
-    if (!file.type.startsWith('image/')) {
-      Alert.alert('Arquivo inválido', 'Selecione apenas arquivos de imagem.');
-      return;
-    }
-
-    if (isBlockedExtension) {
-      Alert.alert('Arquivo não permitido', 'Este tipo de arquivo não pode ser enviado.');
+    const allowedImageTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowedImageTypes.includes(file.type)) {
+      Alert.alert('Arquivo inválido', 'Use uma imagem JPEG, PNG ou WebP.');
       return;
     }
 
@@ -50,13 +53,25 @@ export default function CardiosScreen() {
     }
 
     setPhotoFile(file);
-    setPhotoPreview(URL.createObjectURL(file));
+    if (photoPreviewUrlRef.current) {
+      URL.revokeObjectURL(photoPreviewUrlRef.current);
+    }
+    const previewUrl = URL.createObjectURL(file);
+    photoPreviewUrlRef.current = previewUrl;
+    setPhotoPreview(previewUrl);
   };
 
-  const triggerCamera = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click();
+  const triggerFilePicker = (mode: 'camera' | 'gallery' = 'gallery') => {
+    if (!fileInputRef.current) return;
+
+    if (mode === 'camera') {
+      fileInputRef.current.setAttribute('capture', 'environment');
+    } else {
+      fileInputRef.current.removeAttribute('capture');
     }
+
+    setShowSourceModal(false);
+    fileInputRef.current.click();
   };
 
   const handleRegister = async () => {
@@ -97,8 +112,25 @@ export default function CardiosScreen() {
       setSuccessMessage(`${minutes} min de ${selectedType} registrados!`);
       setShowSuccessModal(true);
 
+      void (async () => {
+        try {
+          const dashboardResponse = await api.get<DashboardData>('/dashboard');
+          const weeklyGoal = Number(dashboardResponse.data?.metaCardioMinutos ?? 0);
+
+          if (dashboardResponse.data?.admin !== true && weeklyGoal > 0) {
+            await requestCardioSuggestion(weeklyGoal, true);
+          }
+        } catch (suggestionError) {
+          console.warn('Erro ao atualizar sugestão após registrar cardio:', suggestionError);
+        }
+      })();
+
       setMinutes('');
       setPhotoFile(null);
+      if (photoPreviewUrlRef.current) {
+        URL.revokeObjectURL(photoPreviewUrlRef.current);
+        photoPreviewUrlRef.current = null;
+      }
       setPhotoPreview(null);
     } catch (error: any) {
       const message = error?.response?.data?.error || 'Não foi possível salvar o cardio.';
@@ -145,18 +177,21 @@ export default function CardiosScreen() {
 
         <input
           type="file"
-          accept="image/*"
-          capture="environment"
+          accept="image/jpeg,image/png,image/webp"
           ref={fileInputRef}
           onChange={handleFileChange}
           style={{ display: 'none' }}
         />
 
-        <TouchableOpacity style={styles.uploadButton} onPress={triggerCamera}>
-          <Text style={styles.uploadButtonText}>
-            {photoFile ? 'Trocar Foto' : 'Tirar/Anexar Foto do Cardio'}
+        <TouchableOpacity
+          style={styles.uploadButtonSingle}
+          onPress={() => setShowSourceModal(true)}
+        >
+          <Text style={styles.uploadButtonTextSingle}>
+            {photoFile ? 'Trocar comprovante' : 'Selecionar comprovante'}
           </Text>
         </TouchableOpacity>
+
         {photoPreview && (
           <View style={styles.previewContainer}>
             <Image source={{ uri: photoPreview }} style={styles.previewImage} />
@@ -172,6 +207,31 @@ export default function CardiosScreen() {
           <Text style={styles.buttonText}>{loading ? 'Enviando...' : 'Salvar Cardio'}</Text>
         </TouchableOpacity>
       </ScrollView>
+
+      <Modal
+        transparent
+        visible={showSourceModal}
+        animationType="fade"
+        onRequestClose={() => setShowSourceModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Selecionar comprovante</Text>
+            <TouchableOpacity
+              style={[styles.modalChoiceButton, styles.primaryButton]}
+              onPress={() => triggerFilePicker('camera')}
+            >
+              <Text style={styles.modalChoiceText}>Tirar foto</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalChoiceButton, styles.secondaryButton]}
+              onPress={() => triggerFilePicker('gallery')}
+            >
+              <Text style={[styles.modalChoiceText, styles.secondaryButtonText]}>Escolher da galeria</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         transparent
@@ -214,6 +274,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  fileActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 8,
+  },
+  uploadButtonSingle: {
+    backgroundColor: '#2563eb',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  uploadButtonTextSingle: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 15,
+  },
   chip: {
     paddingVertical: 10,
     paddingHorizontal: 16,
@@ -225,19 +305,30 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#fff', fontWeight: 'bold' },
   
   uploadButton: {
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderStyle: 'dashed',
+    flex: 1,
+    minWidth: 140,
     borderRadius: 12,
-    padding: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 16,
   },
+  primaryButton: {
+    backgroundColor: '#2563eb',
+  },
+  secondaryButton: {
+    backgroundColor: '#e2e8f0',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
   uploadButtonText: {
-    color: '#0284c7',
+    color: '#fff',
     fontWeight: '600',
     fontSize: 15,
+  },
+  secondaryButtonText: {
+    color: '#0f172a',
   },
   previewContainer: {
     alignItems: 'center',
@@ -291,6 +382,19 @@ const styles = StyleSheet.create({
     color: '#334155',
     textAlign: 'center',
     marginBottom: 20,
+  },
+  modalChoiceButton: {
+    width: '100%',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  modalChoiceText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
   modalButton: {
     backgroundColor: '#2563eb',
