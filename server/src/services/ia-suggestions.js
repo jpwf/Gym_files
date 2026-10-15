@@ -45,14 +45,18 @@ const CARDIO_WEEKDAYS = [
 ];
 const CARDIO_TIME_ZONE = 'America/Sao_Paulo';
 
-function getAllowedCardioDays(now = new Date()) {
+function getAllowedCardioDays(skipToday = false, now = new Date()) {
   const todayKey = new Intl.DateTimeFormat('en-US', {
     weekday: 'long',
     timeZone: CARDIO_TIME_ZONE,
   }).format(now).toLowerCase();
   const todayIndex = CARDIO_WEEKDAYS.findIndex((day) => day.key === todayKey);
+  const firstAllowedIndex = Math.max(todayIndex, 0) + Number(skipToday);
 
-  return CARDIO_WEEKDAYS.slice(Math.max(todayIndex, 0));
+  return CARDIO_WEEKDAYS.slice(firstAllowedIndex).map((day) => ({
+    ...day,
+    isToday: day.key === todayKey,
+  }));
 }
 
 function normalizeWeekday(day) {
@@ -66,10 +70,10 @@ function normalizeWeekday(day) {
 
 function filterAllowedCardioDays(suggestion, allowedDays) {
   const dayLabels = new Map();
-  allowedDays.forEach((day, index) => {
-    const displayLabel = index === 0 ? 'HOJE' : day.label;
+  allowedDays.forEach((day) => {
+    const displayLabel = day.isToday ? 'HOJE' : day.label;
     dayLabels.set(normalizeWeekday(day.label), displayLabel);
-    if (index === 0) {
+    if (day.isToday) {
       dayLabels.set(normalizeWeekday('HOJE'), 'HOJE');
     }
   });
@@ -99,9 +103,6 @@ const obterSugestaoCardio = async (req, res) => {
 
     const supabase = getSupabaseClient();
     const groq = getGroqClient();
-    const allowedDays = getAllowedCardioDays();
-    const todayWeekday = allowedDays[0].label;
-    const allowedDayLabels = allowedDays.map((day, index) => index === 0 ? 'HOJE' : day.label);
     const today = new Intl.DateTimeFormat('en-CA', {
       timeZone: CARDIO_TIME_ZONE,
       year: 'numeric',
@@ -109,26 +110,7 @@ const obterSugestaoCardio = async (req, res) => {
       day: '2-digit',
     }).format(new Date());
 
-    // 1. Verifica no Supabase se já existe cache válido para O DIA DE HOJE
-    const { data: cache } = await supabase
-      .from('ai_cache_sugestoes_app')
-      .select('sugestao_json')
-      .eq('app_user_id', user_id)
-      .gte('data_atualizacao', today)
-      .single();
-
-    if (cache) {
-      const cachedDays = Array.isArray(cache.sugestao_json?.sugestoes_diarias)
-        ? cache.sugestao_json.sugestoes_diarias
-        : null;
-      const filteredCache = filterAllowedCardioDays(cache.sugestao_json, allowedDays);
-
-      if (cachedDays && filteredCache.sugestoes_diarias.length === cachedDays.length) {
-        return res.json({ origem: 'cache', dados: filteredCache });
-      }
-    }
-
-    // 2. Chama a função SQL compressor (obtém os dados sumarizados em poucos tokens)
+    // 1. Atualiza o resumo antes de validar o cache.
     const { data: summary, error: rpcError } = await supabase.rpc(
       'get_app_athlete_cardio_summary_bigint',
       { p_user_id: user_id, p_meta_semanal: metaSemanal }
@@ -151,6 +133,44 @@ const obterSugestaoCardio = async (req, res) => {
       return res.json({ origem: 'sistema', dados: respostaMetaBatida });
     }
 
+    const allowedDays = getAllowedCardioDays(summary.realizado_hoje === true);
+    if (allowedDays.length === 0) {
+      return res.json({
+        origem: 'sistema',
+        dados: {
+          mensagem_motivacional: 'Você já registrou seu cardio hoje. Retome as sugestões amanhã.',
+          sugestoes_diarias: [],
+        },
+      });
+    }
+
+    const todayWeekday = CARDIO_WEEKDAYS.find((day) => day.key === new Intl.DateTimeFormat('en-US', {
+      weekday: 'long',
+      timeZone: CARDIO_TIME_ZONE,
+    }).format(new Date()).toLowerCase())?.label;
+    const allowedDayLabels = allowedDays.map((day) => day.isToday ? 'HOJE' : day.label);
+
+    // 2. Reutiliza cache somente se a chamada não pediu atualização e os dias ainda forem válidos.
+    if (req.body?.atualizar !== true) {
+      const { data: cache } = await supabase
+        .from('ai_cache_sugestoes_app')
+        .select('sugestao_json')
+        .eq('app_user_id', user_id)
+        .gte('data_atualizacao', today)
+        .single();
+
+      if (cache) {
+        const cachedDays = Array.isArray(cache.sugestao_json?.sugestoes_diarias)
+          ? cache.sugestao_json.sugestoes_diarias
+          : null;
+        const filteredCache = filterAllowedCardioDays(cache.sugestao_json, allowedDays);
+
+        if (cachedDays && filteredCache.sugestoes_diarias.length === cachedDays.length) {
+          return res.json({ origem: 'cache', dados: filteredCache });
+        }
+      }
+    }
+
     // 3. Monta os prompts otimizados
     const systemPrompt = 
       'Você é o personal trainer analítico do GymFiles. ' +
@@ -159,7 +179,7 @@ const obterSugestaoCardio = async (req, res) => {
       'Retorne ESTRITAMENTE um JSON válido contendo as chaves: ' +
       '"mensagem_motivacional" (string de até 15 palavras) e ' +
       '"sugestoes_diarias" (lista de objetos com "dia", "minutos_sugeridos" e "motivo"). ' +
-      `Hoje é ${todayWeekday}. Para o dia atual, use exatamente "HOJE". ` +
+      `Hoje é ${todayWeekday}. Para o dia atual, se permitido, use exatamente "HOJE". ` +
       `Sugira SOMENTE estes dias, nesta ordem: ${allowedDayLabels.join(', ')}. ` +
       'Nunca sugira dias anteriores a hoje e use exatamente os nomes informados. ' +
       'Retorne apenas um objeto JSON, sem markdown ou texto fora dele, neste formato: ' +

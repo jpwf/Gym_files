@@ -32,12 +32,13 @@ export function subscribeToCardioSuggestions(listener: (state: CardioSuggestionS
   };
 }
 
-export async function requestCardioSuggestion(metaSemanal: number) {
+export async function requestCardioSuggestion(metaSemanal: number, forceRefresh = false) {
   publish({ status: 'loading' });
 
   try {
     const response = await api.post<CardioSuggestionResponse>('/cardio/sugestao', {
       meta_semanal: metaSemanal,
+      atualizar: forceRefresh,
     });
     publish({ status: 'ready', suggestion: response.data });
     return response.data;

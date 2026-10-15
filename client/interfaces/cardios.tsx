@@ -113,7 +113,7 @@ export default function CardiosScreen() {
           const weeklyGoal = Number(dashboardResponse.data?.metaCardioMinutos ?? 0);
 
           if (dashboardResponse.data?.admin !== true && weeklyGoal > 0) {
-            await requestCardioSuggestion(weeklyGoal);
+            await requestCardioSuggestion(weeklyGoal, true);
           }
         } catch (suggestionError) {
           console.warn('Erro ao atualizar sugestão após registrar cardio:', suggestionError);
