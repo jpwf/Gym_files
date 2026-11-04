@@ -1,8 +1,12 @@
 const Groq = require('groq-sdk');
 const { createClient } = require('@supabase/supabase-js');
+const { createHash } = require('node:crypto');
 
 let groq;
 let supabase;
+const generationsInFlight = new Map();
+
+class InvalidSuggestionError extends Error {}
 
 function getGroqClient() {
   if (!process.env.GROQ_API_KEY) {
@@ -68,27 +72,75 @@ function normalizeWeekday(day) {
     .trim();
 }
 
-function filterAllowedCardioDays(suggestion, allowedDays) {
-  const dayLabels = new Map();
+function validateSuggestion(suggestion, allowedDays, missingMinutes) {
+  if (
+    !suggestion ||
+    typeof suggestion.mensagem_motivacional !== 'string' ||
+    suggestion.mensagem_motivacional.trim().length === 0 ||
+    suggestion.mensagem_motivacional.trim().split(/\s+/).length > 15 ||
+    !Array.isArray(suggestion.sugestoes_diarias) ||
+    suggestion.sugestoes_diarias.length === 0 ||
+    suggestion.sugestoes_diarias.length > allowedDays.length
+  ) {
+    throw new InvalidSuggestionError('Formato ou mensagem da sugestão inválidos.');
+  }
+
+  const dayOptions = new Map();
   allowedDays.forEach((day) => {
     const displayLabel = day.isToday ? 'HOJE' : day.label;
-    dayLabels.set(normalizeWeekday(day.label), displayLabel);
+    const index = CARDIO_WEEKDAYS.findIndex((weekday) => weekday.key === day.key);
+    dayOptions.set(normalizeWeekday(day.label), { displayLabel, index });
     if (day.isToday) {
-      dayLabels.set(normalizeWeekday('HOJE'), 'HOJE');
+      dayOptions.set(normalizeWeekday('HOJE'), { displayLabel, index });
     }
   });
-  const sourceDays = Array.isArray(suggestion?.sugestoes_diarias)
-    ? suggestion.sugestoes_diarias
-    : [];
-  const validSuggestions = sourceDays.flatMap((item) => {
-    const dayLabel = dayLabels.get(normalizeWeekday(item?.dia));
-    return dayLabel ? [{ ...item, dia: dayLabel }] : [];
+
+  const seenDays = new Set();
+  let previousDayIndex = -1;
+  const dailySuggestions = suggestion.sugestoes_diarias.map((item) => {
+    const day = dayOptions.get(normalizeWeekday(item?.dia));
+    if (
+      !day ||
+      seenDays.has(day.index) ||
+      day.index <= previousDayIndex ||
+      typeof item.minutos_sugeridos !== 'number' ||
+      !Number.isFinite(item.minutos_sugeridos) ||
+      item.minutos_sugeridos <= 0 ||
+      typeof item.motivo !== 'string' ||
+      item.motivo.trim().length === 0 ||
+      item.motivo.trim().length > 180
+    ) {
+      throw new InvalidSuggestionError('A sugestão contém dias ou valores inválidos.');
+    }
+
+    seenDays.add(day.index);
+    previousDayIndex = day.index;
+    return {
+      dia: day.displayLabel,
+      minutos_sugeridos: item.minutos_sugeridos,
+      motivo: item.motivo.trim(),
+    };
   });
 
+  const suggestedMinutes = dailySuggestions.reduce((total, item) => total + item.minutos_sugeridos, 0);
+  if (Math.abs(Math.round(suggestedMinutes * 100) - Math.round(missingMinutes * 100)) > 1) {
+    throw new InvalidSuggestionError('A soma sugerida não corresponde aos minutos faltantes.');
+  }
+
   return {
-    ...suggestion,
-    sugestoes_diarias: validSuggestions,
+    mensagem_motivacional: suggestion.mensagem_motivacional.trim(),
+    sugestoes_diarias: dailySuggestions,
   };
+}
+
+function buildContextKey(summary, metaSemanal, today, allowedDays) {
+  const context = JSON.stringify({
+    summary,
+    metaSemanal,
+    today,
+    allowedDays: allowedDays.map((day) => day.key),
+  });
+  return createHash('sha256').update(context).digest('hex');
 }
 
 async function removeCardioSuggestionCache(userId) {
@@ -113,7 +165,6 @@ const obterSugestaoCardio = async (req, res) => {
     }
 
     const supabase = getSupabaseClient();
-    const groq = getGroqClient();
     const today = new Intl.DateTimeFormat('en-CA', {
       timeZone: CARDIO_TIME_ZONE,
       year: 'numeric',
@@ -136,7 +187,12 @@ const obterSugestaoCardio = async (req, res) => {
       throw new Error('A função de resumo não retornou dados válidos.');
     }
 
-    if (Number(summary.faltante) === 0) {
+    const missingMinutes = Number(summary.faltante);
+    if (!Number.isFinite(missingMinutes) || missingMinutes < 0) {
+      throw new Error('A função de resumo retornou minutos faltantes inválidos.');
+    }
+
+    if (missingMinutes === 0) {
       const respostaMetaBatida = {
         mensagem_motivacional: 'Meta semanal concluída com sucesso! Mantenha o foco na recuperação.',
         sugestoes_diarias: []
@@ -160,104 +216,146 @@ const obterSugestaoCardio = async (req, res) => {
       timeZone: CARDIO_TIME_ZONE,
     }).format(new Date()).toLowerCase())?.label;
     const allowedDayLabels = allowedDays.map((day) => day.isToday ? 'HOJE' : day.label);
+    const contextKey = buildContextKey(summary, metaSemanal, today, allowedDays);
 
-    // 2. Reutiliza cache somente se a chamada não pediu atualização e os dias ainda forem válidos.
     if (req.body?.atualizar !== true) {
-      const { data: cache } = await supabase
+      const { data: cache, error: cacheReadError } = await supabase
         .from('ai_cache_sugestoes_app')
         .select('sugestao_json')
         .eq('app_user_id', user_id)
-        .gte('data_atualizacao', today)
-        .single();
+        .maybeSingle();
 
-      if (cache) {
-        const cachedDays = Array.isArray(cache.sugestao_json?.sugestoes_diarias)
-          ? cache.sugestao_json.sugestoes_diarias
-          : null;
-        const filteredCache = filterAllowedCardioDays(cache.sugestao_json, allowedDays);
+      if (cacheReadError) {
+        throw new Error(`Erro ao consultar cache da sugestão: ${cacheReadError.message}`);
+      }
 
-        if (cachedDays && filteredCache.sugestoes_diarias.length === cachedDays.length) {
-          return res.json({ origem: 'cache', dados: filteredCache });
+      if (cache?.sugestao_json?._context_key === contextKey) {
+        try {
+          const cachedSuggestion = validateSuggestion(
+            cache.sugestao_json,
+            allowedDays,
+            missingMinutes
+          );
+          return res.json({ origem: 'cache', dados: cachedSuggestion });
+        } catch {
+          console.warn('Cache de sugestão inválido; será gerada uma nova resposta.');
         }
       }
     }
 
-    // 3. Monta os prompts otimizados
-    const systemPrompt = 
-      'Você é o personal trainer analítico do GymFiles. ' +
-      'Com base nos dados compactos do atleta, distribua os minutos faltantes ' +
-      'nos dias restantes da semana priorizando o padrão histórico dele. ' +
-      'Retorne ESTRITAMENTE um JSON válido contendo as chaves: ' +
-      '"mensagem_motivacional" (string de até 15 palavras) e ' +
-      '"sugestoes_diarias" (lista de objetos com "dia", "minutos_sugeridos" e "motivo"). ' +
-      `Hoje é ${todayWeekday}. Para o dia atual, se permitido, use exatamente "HOJE". ` +
-      `Sugira SOMENTE estes dias, nesta ordem: ${allowedDayLabels.join(', ')}. ` +
-      'Nunca sugira dias anteriores a hoje e use exatamente os nomes informados. ' +
-      'Retorne apenas um objeto JSON, sem markdown ou texto fora dele, neste formato: ' +
-      '{"mensagem_motivacional":"...","sugestoes_diarias":[{"dia":"...","minutos_sugeridos":30,"motivo":"..."}]}.';
+    const generationKey = `${user_id}:${contextKey}`;
+    let generation = generationsInFlight.get(generationKey);
 
-    const userPrompt = `Dias válidos para as sugestões: ${allowedDayLabels.join(', ')}. Dados do atleta: ${JSON.stringify(summary)}`;
+    if (!generation) {
+      generation = (async () => {
+        const groq = getGroqClient();
+        const systemPrompt =
+          'Use os dados fornecidos, que resumem as últimas 3 semanas de cardio do atleta. ' +
+          'Planeje os minutos faltantes da meta semanal usando o menor número razoável de dias, ' +
+          'respeitando o volume e os dias habituais do histórico. Não exceda o maior volume diário ' +
+          'observado no histórico, salvo se isso tornar a meta impossível. Nunca inclua dia com 0 minutos. ' +
+          'Use somente dias permitidos, na ordem informada, e distribua exatamente os minutos faltantes. ' +
+          'Retorne somente JSON com mensagem_motivacional (até 15 palavras) e ' +
+          'sugestoes_diarias (itens com dia, minutos_sugeridos numéricos e motivo curto).';
+        const userPrompt =
+          `Hoje é ${todayWeekday}. Dias permitidos: ${allowedDayLabels.join(', ')}. ` +
+          `Minutos faltantes: ${missingMinutes}. Dados resumidos: ${JSON.stringify(summary)}`;
+        const messages = [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ];
+        let completion;
 
-    let sugestaoTexto = null;
+        try {
+          completion = await groq.chat.completions.create({
+            messages,
+            model: PRIMARY_MODEL,
+            response_format: { type: 'json_object' },
+            temperature: 0.2,
+            max_tokens: 500,
+          });
+        } catch (primaryError) {
+          const status = Number(primaryError?.status);
+          if (status !== 429 && (!Number.isFinite(status) || status < 500)) {
+            throw primaryError;
+          }
 
-    // 4. Execução no Groq com Fallback de Modelo
+          console.warn(
+            `Falha no modelo primário (${PRIMARY_MODEL}); tentando fallback (${FALLBACK_MODEL}):`,
+            primaryError?.status,
+            primaryError?.message
+          );
+          completion = await groq.chat.completions.create({
+            messages,
+            model: FALLBACK_MODEL,
+            response_format: { type: 'json_object' },
+            temperature: 0.2,
+            max_tokens: 500,
+          });
+        }
+
+        const suggestionText = completion.choices[0]?.message?.content;
+        if (!suggestionText) {
+          throw new InvalidSuggestionError('A IA retornou uma resposta vazia.');
+        }
+
+        let parsedSuggestion;
+        try {
+          parsedSuggestion = JSON.parse(suggestionText);
+        } catch {
+          throw new InvalidSuggestionError('A IA retornou um JSON inválido.');
+        }
+
+        const validatedSuggestion = validateSuggestion(
+          parsedSuggestion,
+          allowedDays,
+          missingMinutes
+        );
+        const cachedSuggestion = {
+          ...validatedSuggestion,
+          _context_key: contextKey,
+        };
+        const { error: cacheError } = await supabase
+          .from('ai_cache_sugestoes_app')
+          .upsert({
+            app_user_id: user_id,
+            sugestao_json: cachedSuggestion,
+            data_atualizacao: new Date().toISOString(),
+          }, { onConflict: 'app_user_id' });
+
+        if (cacheError) {
+          throw new Error(`Erro ao salvar cache da sugestão: ${cacheError.message}`);
+        }
+
+        return validatedSuggestion;
+      })();
+      generationsInFlight.set(generationKey, generation);
+    }
+
     try {
-      const completion = await groq.chat.completions.create({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        model: PRIMARY_MODEL,
-        response_format: { type: 'json_object' },
-        temperature: 0.3,
-        max_tokens: 1200
-      });
-
-      sugestaoTexto = completion.choices[0]?.message?.content;
-    } catch (primaryError) {
-      console.warn(
-        `Falha no modelo primário (${PRIMARY_MODEL}); tentando fallback (${FALLBACK_MODEL}):`,
-        primaryError?.status,
-        primaryError?.message
-      );
-      
-      const fallbackCompletion = await groq.chat.completions.create({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        model: FALLBACK_MODEL,
-        response_format: { type: 'json_object' },
-        temperature: 0.3,
-        max_tokens: 1200
-      });
-
-      sugestaoTexto = fallbackCompletion.choices[0]?.message?.content;
+      const suggestion = await generation;
+      return res.json({ origem: 'ia_gerado', dados: suggestion });
+    } finally {
+      if (generationsInFlight.get(generationKey) === generation) {
+        generationsInFlight.delete(generationKey);
+      }
     }
-
-    if (!sugestaoTexto) {
-      throw new Error('Não foi possível obter resposta da IA.');
-    }
-
-    const sugestaoJson = filterAllowedCardioDays(JSON.parse(sugestaoTexto), allowedDays);
-
-    // 5. Salva a resposta no cache do Supabase
-    const { error: cacheError } = await supabase.from('ai_cache_sugestoes_app').upsert({
-      app_user_id: user_id,
-      sugestao_json: sugestaoJson,
-      data_atualizacao: new Date().toISOString()
-    }, { onConflict: 'app_user_id' });
-
-    if (cacheError) {
-      throw new Error(`Erro ao salvar cache da sugestão: ${cacheError.message}`);
-    }
-
-    return res.json({ origem: 'ia_gerado', dados: sugestaoJson });
 
   } catch (error) {
     console.error('Erro na rota de sugestão de cardio:', error?.status, error?.message);
+    if (error instanceof InvalidSuggestionError) {
+      return res.status(502).json({
+        error: 'A IA não conseguiu montar uma sugestão válida. Tente novamente.',
+      });
+    }
     return res.status(500).json({ error: 'Erro interno ao gerar sugestão de cardio.' });
   }
 };
 
-module.exports = { obterSugestaoCardio, removeCardioSuggestionCache };
+module.exports = {
+  obterSugestaoCardio,
+  removeCardioSuggestionCache,
+  getAllowedCardioDays,
+  validateSuggestion,
+  buildContextKey,
+};

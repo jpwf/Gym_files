@@ -1,8 +1,10 @@
 const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const prisma = new PrismaClient();
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET não configurada no ambiente');
+}
 
 function canRootAccess(method, path) {
   return (
