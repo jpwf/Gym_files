@@ -255,8 +255,10 @@ const obterSugestaoCardio = async (req, res) => {
           'respeitando o volume e os dias habituais do histórico. Não exceda o maior volume diário ' +
           'observado no histórico, salvo se isso tornar a meta impossível. Nunca inclua dia com 0 minutos. ' +
           'Use somente dias permitidos, na ordem informada, e distribua exatamente os minutos faltantes. ' +
-          'Retorne somente JSON com mensagem_motivacional (até 15 palavras) e ' +
-          'sugestoes_diarias (itens com dia, minutos_sugeridos numéricos e motivo curto).';
+          'Retorne somente um objeto JSON válido, sem markdown, comentários ou texto adicional, com o formato ' +
+          '{"mensagem_motivacional":"frase de até 15 palavras","sugestoes_diarias":' +
+          '[{"dia":"um dos dias permitidos","minutos_sugeridos":30,"motivo":"motivo curto"}]}. ' +
+          'minutos_sugeridos deve ser numérico; não inclua campos adicionais.';
         const userPrompt =
           `Hoje é ${todayWeekday}. Dias permitidos: ${allowedDayLabels.join(', ')}. ` +
           `Minutos faltantes: ${missingMinutes}. Dados resumidos: ${JSON.stringify(summary)}`;
@@ -272,11 +274,15 @@ const obterSugestaoCardio = async (req, res) => {
             model: PRIMARY_MODEL,
             response_format: { type: 'json_object' },
             temperature: 0.2,
-            max_tokens: 500,
+            max_tokens: 1000,
           });
         } catch (primaryError) {
           const status = Number(primaryError?.status);
-          if (status !== 429 && (!Number.isFinite(status) || status < 500)) {
+          const jsonValidationFailed =
+            primaryError?.code === 'json_validate_failed' ||
+            primaryError?.error?.code === 'json_validate_failed' ||
+            primaryError?.error?.error?.code === 'json_validate_failed';
+          if (!jsonValidationFailed && status !== 429 && (!Number.isFinite(status) || status < 500)) {
             throw primaryError;
           }
 
@@ -290,7 +296,7 @@ const obterSugestaoCardio = async (req, res) => {
             model: FALLBACK_MODEL,
             response_format: { type: 'json_object' },
             temperature: 0.2,
-            max_tokens: 500,
+            max_tokens: 1000,
           });
         }
 
