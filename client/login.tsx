@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import { FontAwesome } from '@expo/vector-icons';
 import { makeRedirectUri, ResponseType, useAuthRequest } from 'expo-auth-session';
 import * as Crypto from 'expo-crypto';
@@ -57,19 +57,13 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [nonce, setNonce] = useState(() => Crypto.randomUUID());
   const googleClientId = Platform.select({
     ios: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
     android: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
     default: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
   });
   const redirectUri = makeRedirectUri({ scheme: 'gymfiles' });
-
-  // Gera nonce fresco a cada tentativa de login
-  const generateNonce = useCallback(async () => {
-    const nonce = Crypto.randomUUID();
-    await saveNonce(nonce);
-    return nonce;
-  }, []);
 
   const [googleRequest, , promptGoogleLogin] = useAuthRequest(
     {
@@ -78,7 +72,7 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
       responseType: ResponseType.IdToken,
       scopes: ['openid', 'profile', 'email'],
       usePKCE: false,
-      extraParams: { prompt: 'select_account' }, // nonce será adicionado dinamicamente
+      extraParams: { prompt: 'select_account', nonce },
     },
     { authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth' }
   );
@@ -159,11 +153,8 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
     setLoading(true);
 
     try {
-      // Gera nonce fresco para esta tentativa
-      const nonce = await generateNonce();
-
-      // Passa nonce via extraParams no prompt (forma correta com expo-auth-session)
-      const result = await promptGoogleLogin({ extraParams: { prompt: 'select_account', nonce } });
+      await saveNonce(nonce);
+      const result = await promptGoogleLogin();
       if (result.type !== 'success') {
         return;
       }
@@ -202,6 +193,7 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
 
       setLoginError(message);
     } finally {
+      setNonce(Crypto.randomUUID());
       setLoading(false);
     }
   }
