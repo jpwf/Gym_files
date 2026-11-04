@@ -4,6 +4,7 @@ import { makeRedirectUri, ResponseType, useAuthRequest } from 'expo-auth-session
 import * as Crypto from 'expo-crypto';
 import * as WebBrowser from 'expo-web-browser';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -19,6 +20,32 @@ import { setAuthToken } from './services/auth-storage';
 WebBrowser.maybeCompleteAuthSession();
 
 const NONCE_KEY = 'google_oauth_nonce';
+
+async function saveNonce(nonce: string) {
+  if (Platform.OS === 'web') {
+    await AsyncStorage.setItem(NONCE_KEY, nonce);
+    return;
+  }
+
+  await SecureStore.setItemAsync(NONCE_KEY, nonce);
+}
+
+async function getNonce() {
+  if (Platform.OS === 'web') {
+    return AsyncStorage.getItem(NONCE_KEY);
+  }
+
+  return SecureStore.getItemAsync(NONCE_KEY);
+}
+
+async function clearNonce() {
+  if (Platform.OS === 'web') {
+    await AsyncStorage.removeItem(NONCE_KEY);
+    return;
+  }
+
+  await SecureStore.deleteItemAsync(NONCE_KEY);
+}
 
 type LoginScreenProps = {
   navigation?: any;
@@ -40,7 +67,7 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
   // Gera nonce fresco a cada tentativa de login
   const generateNonce = useCallback(async () => {
     const nonce = Crypto.randomUUID();
-    await SecureStore.setItemAsync(NONCE_KEY, nonce);
+    await saveNonce(nonce);
     return nonce;
   }, []);
 
@@ -147,7 +174,7 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
       }
 
       // Recupera o nonce salvo para validação no servidor
-      const savedNonce = await SecureStore.getItemAsync(NONCE_KEY);
+      const savedNonce = await getNonce();
       if (!savedNonce) {
         throw new Error('Nonce de autenticação perdido. Tente novamente.');
       }
@@ -160,12 +187,12 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
       }
 
       // Limpa o nonce após uso bem-sucedido
-      await SecureStore.deleteItemAsync(NONCE_KEY);
+      await clearNonce();
 
       await completeLogin(appToken);
     } catch (error: any) {
       // Limpa nonce em caso de erro
-      await SecureStore.deleteItemAsync(NONCE_KEY).catch(() => {});
+      await clearNonce().catch(() => {});
 
       const message =
         error?.response?.data?.message ||
