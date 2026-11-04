@@ -35,6 +35,7 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
     android: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
     default: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
   });
+  const redirectUri = makeRedirectUri({ scheme: 'gymfiles' });
 
   // Gera nonce fresco a cada tentativa de login
   const generateNonce = useCallback(async () => {
