@@ -52,7 +52,7 @@ export default function HomeScreen() {
 
       const weeklyGoal = Number(response.data?.metaCardioMinutos ?? 0);
       if (response.data?.admin !== true && weeklyGoal > 0) {
-        void requestCardioSuggestion(weeklyGoal).catch((error) => {
+        void requestCardioSuggestion(weeklyGoal).catch((error: unknown) => {
           console.warn('Erro ao carregar sugestão de cardio:', error);
         });
       }
@@ -64,6 +64,15 @@ export default function HomeScreen() {
       } else {
         setLoading(false);
       }
+    }
+  };
+
+  const retryCardioSuggestion = () => {
+    const weeklyGoal = Number(dashboardData?.metaCardioMinutos ?? 0);
+    if (weeklyGoal > 0) {
+      void requestCardioSuggestion(weeklyGoal).catch((error: unknown) => {
+        console.warn('Erro ao tentar novamente a sugestão de cardio:', error);
+      });
     }
   };
 
@@ -235,33 +244,44 @@ export default function HomeScreen() {
                 {loadingSuggestion && <ActivityIndicator size="small" color="#0f766e" />}
               </View>
 
-              {loadingSuggestion ? (
-                <Text style={styles.suggestionHint}>Montando seu plano para esta semana...</Text>
-              ) : suggestionError ? (
-                <Text style={styles.suggestionHint}>Não foi possível carregar a sugestão agora.</Text>
-              ) : cardioSuggestion ? (
+              <Text style={styles.suggestionDisclaimer}>
+                Sugestão gerada por IA; pode conter erros. Use como orientação geral e ajuste ao seu contexto.
+              </Text>
+
+              {loadingSuggestion && (
+                <Text style={styles.suggestionHint}>
+                  {cardioSuggestion ? 'Atualizando sua sugestão...' : 'Montando seu plano para esta semana...'}
+                </Text>
+              )}
+
+              {suggestionError && (
+                <View style={styles.suggestionErrorRow}>
+                  <Text style={styles.suggestionHint}>Não foi possível atualizar a sugestão.</Text>
+                  <TouchableOpacity onPress={retryCardioSuggestion} accessibilityRole="button">
+                    <Text style={styles.suggestionRetry}>Tentar novamente</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {cardioSuggestion ? (
                 <>
                   <Text style={styles.suggestionMotivation}>
                     {cardioSuggestion.dados.mensagem_motivacional}
                   </Text>
-                  {cardioSuggestion.dados.sugestoes_diarias.length === 0 ? (
-                    <Text style={styles.suggestionHint}>Sua meta semanal foi concluída.</Text>
-                  ) : (
-                    cardioSuggestion.dados.sugestoes_diarias.map((item, index) => (
-                      <View key={`${item.dia}-${index}`} style={styles.suggestionItem}>
-                        <Text style={styles.suggestionDay}>
-                          {item.dia} · {item.minutos_sugeridos} min
-                        </Text>
-                        <Text style={styles.suggestionReason}>{item.motivo}</Text>
-                      </View>
-                    ))
-                  )}
+                  {cardioSuggestion.dados.sugestoes_diarias.map((item, index) => (
+                    <View key={`${item.dia}-${index}`} style={styles.suggestionItem}>
+                      <Text style={styles.suggestionDay}>
+                        {item.dia} · {item.minutos_sugeridos} min
+                      </Text>
+                      <Text style={styles.suggestionReason}>{item.motivo}</Text>
+                    </View>
+                  ))}
                 </>
-              ) : (
+              ) : !loadingSuggestion && !suggestionError ? (
                 <Text style={styles.suggestionHint}>
                   Defina uma meta semanal para receber sugestões personalizadas.
                 </Text>
-              )}
+              ) : null}
             </View>
           </>
         ) : (
@@ -460,6 +480,9 @@ const styles = StyleSheet.create({
   suggestionTitle: { fontSize: 16, fontWeight: '700', color: '#115e59' },
   suggestionMotivation: { color: '#134e4a', fontSize: 14, fontWeight: '600', marginBottom: 8 },
   suggestionHint: { color: '#475569', fontSize: 13 },
+  suggestionDisclaimer: { color: '#64748b', fontSize: 12, marginBottom: 8 },
+  suggestionErrorRow: { gap: 6, marginTop: 6 },
+  suggestionRetry: { color: '#0f766e', fontSize: 13, fontWeight: '700' },
   suggestionItem: { paddingTop: 10, borderTopWidth: 1, borderTopColor: '#ccefe3', marginTop: 8 },
   suggestionDay: { color: '#0f172a', fontSize: 14, fontWeight: '700' },
   suggestionReason: { color: '#475569', fontSize: 13, marginTop: 3 },

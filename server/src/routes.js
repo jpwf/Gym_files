@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
-const { rateLimit } = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { OAuth2Client } = require('google-auth-library');
 const validateLogin = require('./middleware/validateLogin');
 const verifyJWT = require('./middleware/verifyJWT'); 
@@ -17,14 +17,18 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const PIPEFY_TOKEN = process.env.PIPEFYKEY;
 const ORG_ID = process.env.PIPEFY_ORG_ID;
-const upload = require('./middleware/upload_img');
-let prisma;
-try {
-  const { PrismaClient } = require('@prisma/client');
-  prisma = new PrismaClient();
-} catch (e) {
-  console.error('ERRO AO INICIALIZAR O PRISMA:', e.message);
-}
+const { upload, validateImageMagicBytes } = require('./middleware/upload_img');
+const prisma = require('./lib/prisma');
+const {
+  loginSchema,
+  cardioSchema,
+  treinoSchema,
+  profileSchema,
+  createUserSchema,
+  updateUserSchema,
+  cardioSuggestionSchema,
+  metaCardioSchema,
+} = require('./lib/schemas');
 
 function requireRoot(req, res, next) {
   if (req.user?.is_root !== true) {
@@ -32,6 +36,21 @@ function requireRoot(req, res, next) {
   }
 
   return next();
+}
+
+// Zod validation middleware
+function validate(schema) {
+  return (req, res, next) => {
+    const result = schema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({
+        error: 'Dados inválidos',
+        details: result.error.flatten().fieldErrors,
+      });
+    }
+    req.validated = result.data;
+    next();
+  };
 }
 
 const loginRateLimit = rateLimit({
@@ -53,10 +72,47 @@ const googleAuthRateLimit = rateLimit({
 const cardioSuggestionRateLimit = rateLimit({
   windowMs: 60 * 60 * 1000,
   limit: 6,
-  keyGenerator: (req) => `user:${req.user.id}`,
+  keyGenerator: (req) => `user:${req.user?.id || ipKeyGenerator(req.ip)}`,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: { error: 'Limite de sugestões atingido. Tente novamente mais tarde.' },
+});
+
+// Specific rate limits for authenticated routes (per user)
+const cardioRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  keyGenerator: (req) => `user:${req.user?.id || ipKeyGenerator(req.ip)}`,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Muitos registros de cardio. Aguarde antes de tentar novamente.' },
+});
+
+const treinoRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  keyGenerator: (req) => `user:${req.user?.id || ipKeyGenerator(req.ip)}`,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Muitos registros de treino. Aguarde antes de tentar novamente.' },
+});
+
+const dashboardRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  keyGenerator: (req) => `user:${req.user?.id || ipKeyGenerator(req.ip)}`,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Muitas consultas ao dashboard. Aguarde antes de tentar novamente.' },
+});
+
+const profileRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  keyGenerator: (req) => `user:${req.user?.id || ipKeyGenerator(req.ip)}`,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Muitas alterações de perfil. Aguarde antes de tentar novamente.' },
 });
 
 
@@ -151,20 +207,20 @@ router.post('/auth/google', googleAuthRateLimit, async (req, res) => {
   }
 });
 
-router.post('/cardio/sugestao', verifyJWT, cardioSuggestionRateLimit, obterSugestaoCardio);
+router.post('/cardio/sugestao', verifyJWT, cardioSuggestionRateLimit, validate(cardioSuggestionSchema), obterSugestaoCardio);
 
-router.post('/login', loginRateLimit, validateLogin, async (req, res) => {
-  const { email, password, username } = req.body;
+router.post('/login', loginRateLimit, validate(loginSchema), async (req, res) => {
+  const { email, password, username } = req.validated;
 
   if (!prisma) {
-    return res.status(500).json({ 
-      message: 'Prisma não disponível no servidor. Configure a camada de dados.' 
+    return res.status(500).json({
+      message: 'Prisma não disponível no servidor. Configure a camada de dados.'
     });
   }
 
   try {
-    const cleanEmail = typeof email === 'string' ? email.trim() : '';
-    const cleanUsername = typeof username === 'string' ? username.trim() : '';
+    const cleanEmail = email?.trim() || '';
+    const cleanUsername = username?.trim() || '';
     const loginIdentifier = cleanEmail || cleanUsername;
 
     let user = null;
@@ -190,24 +246,13 @@ router.post('/login', loginRateLimit, validateLogin, async (req, res) => {
     }
 
     const storedPassword = user.secretkey || user.password_hash;
-    const isBcryptHash = storedPassword && storedPassword.startsWith('$2');
-    let validPassword = false;
 
-    if (isBcryptHash) {
-      validPassword = await bcrypt.compare(password, storedPassword);
-    } else {
-      validPassword = (password === storedPassword);
-
-      if (validPassword) {
-        console.log(`Migrando senha do usuário "${user.email}" para hash BCrypt...`);
-        const newHash = await bcrypt.hash(password, 10);
-
-        await prisma.users.update({
-          where: { id: user.id },
-          data: { secretkey: newHash }
-        });
-      }
+    if (!storedPassword || !storedPassword.startsWith('$2')) {
+      console.warn('[LOGIN] Hash inválido ou ausente para usuário:', user.email);
+      return res.status(401).json({ message: 'Acesso ou senha incorretos.' });
     }
+
+    const validPassword = await bcrypt.compare(password, storedPassword);
 
     if (!validPassword) {
       console.warn('[LOGIN FAILED] Credenciais inválidas.');
@@ -247,7 +292,7 @@ router.post('/login', loginRateLimit, validateLogin, async (req, res) => {
   }
 });
 
-router.get('/dashboard', verifyJWT, async (req, res) => {
+router.get('/dashboard', verifyJWT, dashboardRateLimit, async (req, res) => {
   if (!prisma) {
     return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
   }
@@ -319,7 +364,7 @@ router.get('/dashboard', verifyJWT, async (req, res) => {
     return res.status(500).json({ error: 'Erro interno ao carregar dados do painel.' });
   }
 });
-router.post('/cardios', verifyJWT, upload.single('foto'), async (req, res) => {
+router.post('/cardios', verifyJWT, cardioRateLimit, upload.single('foto'), validateImageMagicBytes, validate(cardioSchema), async (req, res) => {
   if (!prisma) {
     return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
   }
@@ -328,16 +373,12 @@ router.post('/cardios', verifyJWT, upload.single('foto'), async (req, res) => {
     const userId = BigInt(req.user.id);
 
     if (!req.file) {
-      return res.status(400).json({ 
-        error: 'É obrigatório enviar uma foto de comprovação para registrar o cardio.' 
+      return res.status(400).json({
+        error: 'É obrigatório enviar uma foto de comprovação para registrar o cardio.'
       });
     }
 
-    const { tipo, duracao_min, data } = req.body;
-
-    if (!tipo || duracao_min === undefined) {
-      return res.status(400).json({ error: 'Informe o tipo de cardio e a duração em minutos.' });
-    }
+    const { tipo, duracao_min, data } = req.validated;
 
     const foto_url = await uploadCardioProof(userId, req.file.buffer);
 
@@ -372,14 +413,14 @@ router.post('/cardios', verifyJWT, upload.single('foto'), async (req, res) => {
     return res.status(500).json({ error: 'Erro interno ao salvar cardio.' });
   }
 });
-router.post('/treinos', verifyJWT, async (req, res) => {
+router.post('/treinos', verifyJWT, treinoRateLimit, validate(treinoSchema), async (req, res) => {
   if (!prisma) {
     return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
   }
 
   try {
     const userId = BigInt(req.user.id);
-    const { tipo, data } = req.body;
+    const { tipo, data } = req.validated;
 
     let tipoTreino = '';
 
@@ -423,7 +464,7 @@ router.post('/treinos', verifyJWT, async (req, res) => {
     return res.status(500).json({ error: 'Erro interno ao salvar treino.' });
   }
 });
-router.get('/ranking', verifyJWT, async (req, res) => {
+router.get('/ranking', verifyJWT, dashboardRateLimit, async (req, res) => {
   if (!prisma) {
     return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
   }
@@ -449,6 +490,7 @@ router.get('/ranking', verifyJWT, async (req, res) => {
                  SUM(
                    CASE
                      WHEN lower(tipo) LIKE '%escada%' THEN duracao_min * 2
+                     WHEN lower(tipo) LIKE '%caminhada%' THEN duracao_min * 0.5
                      ELSE duracao_min
                    END
                  ) AS total_pontos
@@ -606,7 +648,7 @@ router.get('/trainer-athletes/:id', verifyJWT, async (req, res) => {
   }
 });
 
-router.post('/athletes/:id/meta-cardio', verifyJWT, async (req, res) => {
+router.post('/athletes/:id/meta-cardio', verifyJWT, validate(metaCardioSchema), async (req, res) => {
   if (!prisma) {
     return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
   }
@@ -617,11 +659,7 @@ router.post('/athletes/:id/meta-cardio', verifyJWT, async (req, res) => {
 
   try {
     const athleteId = BigInt(req.params.id);
-    const metaMinutos = Number(req.body.meta_minutos || 0);
-
-    if (!Number.isFinite(metaMinutos) || metaMinutos < 0) {
-      return res.status(400).json({ error: 'Informe uma meta de minutos válida.' });
-    }
+    const { meta_minutos: metaMinutos } = req.validated;
 
     const athlete = await prisma.users.findUnique({ where: { id: athleteId } });
     if (!athlete) {
@@ -675,28 +713,13 @@ router.get('/root/users', verifyJWT, requireRoot, async (req, res) => {
   }
 });
 
-router.post('/root/users', verifyJWT, requireRoot, async (req, res) => {
+router.post('/root/users', verifyJWT, requireRoot, validate(createUserSchema), async (req, res) => {
   if (!prisma) {
     return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
   }
 
   try {
-    const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
-    const password = req.body?.password;
-    const isAdmin = req.body?.is_admin === true;
-
-    if (!username || username.length > 80) {
-      return res.status(400).json({ error: 'Informe um nome de usuário de até 80 caracteres.' });
-    }
-
-    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: 'Informe um e-mail válido.' });
-    }
-
-    if (typeof password !== 'string' || password.length < 8) {
-      return res.status(400).json({ error: 'A senha deve ter pelo menos 8 caracteres.' });
-    }
+    const { username, email, password, is_admin: isAdmin } = req.validated;
 
     const existingUser = await prisma.users.findFirst({
       where: {
@@ -789,7 +812,7 @@ router.delete('/root/users/:id', verifyJWT, requireRoot, async (req, res) => {
   }
 });
 
-router.get('/profile-data', verifyJWT, async (req, res) => {
+router.get('/profile-data', verifyJWT, profileRateLimit, async (req, res) => {
   if (!prisma) {
     return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
   }
@@ -831,7 +854,7 @@ router.get('/profile-data', verifyJWT, async (req, res) => {
   }
 });
 
-router.put('/profile-data', verifyJWT, async (req, res) => {
+router.put('/profile-data', verifyJWT, profileRateLimit, validate(profileSchema), async (req, res) => {
   if (!prisma) {
     return res.status(500).json({ error: 'Prisma não disponível no servidor.' });
   }
@@ -843,11 +866,10 @@ router.put('/profile-data', verifyJWT, async (req, res) => {
       return res.status(404).json({ error: 'Usuário não encontrado.' });
     }
 
-    const incomingUsername = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
-    const incomingEmail = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+    const { username: incomingUsername, email: incomingEmail } = req.validated;
 
-    const nextUsername = incomingUsername || currentUser.username || '';
-    const nextEmail = incomingEmail || currentUser.email || '';
+    const nextUsername = incomingUsername?.trim() || currentUser.username || '';
+    const nextEmail = incomingEmail?.trim() || currentUser.email || '';
 
     if (!nextUsername) {
       return res.status(400).json({ error: 'Informe um nome de usuário válido.' });
@@ -858,8 +880,8 @@ router.put('/profile-data', verifyJWT, async (req, res) => {
     }
 
     const hasAnyFieldChanged =
-      incomingUsername !== '' && incomingUsername !== (currentUser.username || '') ||
-      incomingEmail !== '' && incomingEmail !== (currentUser.email || '');
+      (incomingUsername !== undefined && incomingUsername !== (currentUser.username || '')) ||
+      (incomingEmail !== undefined && incomingEmail !== (currentUser.email || ''));
 
     if (!hasAnyFieldChanged) {
       return res.status(400).json({ error: 'Informe ao menos um campo para atualizar.' });

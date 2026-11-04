@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { FontAwesome } from '@expo/vector-icons';
 import { makeRedirectUri, ResponseType, useAuthRequest } from 'expo-auth-session';
 import * as Crypto from 'expo-crypto';
 import * as WebBrowser from 'expo-web-browser';
+import * as SecureStore from 'expo-secure-store';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -17,6 +18,8 @@ import { setAuthToken } from './services/auth-storage';
 
 WebBrowser.maybeCompleteAuthSession();
 
+const NONCE_KEY = 'google_oauth_nonce';
+
 type LoginScreenProps = {
   navigation?: any;
   onLoginSuccess?: () => void;
@@ -27,23 +30,27 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
-  const [googleNonce] = useState(() => Crypto.randomUUID());
   const googleClientId = Platform.select({
     ios: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
     android: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
     default: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
   });
-  const redirectUri = Platform.OS === 'web'
-    ? window.location.origin
-    : makeRedirectUri({ scheme: 'gymfiles', path: 'oauth2redirect' });
+
+  // Gera nonce fresco a cada tentativa de login
+  const generateNonce = useCallback(async () => {
+    const nonce = Crypto.randomUUID();
+    await SecureStore.setItemAsync(NONCE_KEY, nonce);
+    return nonce;
+  }, []);
+
   const [googleRequest, , promptGoogleLogin] = useAuthRequest(
     {
       clientId: googleClientId || '',
       redirectUri,
       responseType: ResponseType.IdToken,
       scopes: ['openid', 'profile', 'email'],
-      usePKCE: false,
-      extraParams: { prompt: 'select_account', nonce: googleNonce },
+      usePKCE: true,
+      extraParams: { prompt: 'select_account' }, // nonce será adicionado dinamicamente
     },
     { authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth' }
   );
@@ -124,7 +131,11 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
     setLoading(true);
 
     try {
-      const result = await promptGoogleLogin();
+      // Gera nonce fresco para esta tentativa
+      const nonce = await generateNonce();
+
+      // Passa nonce via extraParams no prompt (forma correta com expo-auth-session)
+      const result = await promptGoogleLogin({ extraParams: { prompt: 'select_account', nonce } });
       if (result.type !== 'success') {
         return;
       }
@@ -134,15 +145,27 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
         throw new Error('O Google não retornou um ID token. Confira o Client ID OAuth configurado.');
       }
 
-      const response = await api.post('/auth/google', { idToken, nonce: googleNonce });
+      // Recupera o nonce salvo para validação no servidor
+      const savedNonce = await SecureStore.getItemAsync(NONCE_KEY);
+      if (!savedNonce) {
+        throw new Error('Nonce de autenticação perdido. Tente novamente.');
+      }
+
+      const response = await api.post('/auth/google', { idToken, nonce: savedNonce });
       const appToken = response?.data?.token;
 
       if (!appToken) {
         throw new Error('O servidor não retornou o token da aplicação.');
       }
 
+      // Limpa o nonce após uso bem-sucedido
+      await SecureStore.deleteItemAsync(NONCE_KEY);
+
       await completeLogin(appToken);
     } catch (error: any) {
+      // Limpa nonce em caso de erro
+      await SecureStore.deleteItemAsync(NONCE_KEY).catch(() => {});
+
       const message =
         error?.response?.data?.message ||
         error?.response?.data?.error ||
