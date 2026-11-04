@@ -245,7 +245,7 @@ export default function HomeScreen() {
               </View>
 
               <Text style={styles.suggestionDisclaimer}>
-                Sugestão gerada por IA; pode conter erros. Use como orientação geral e ajuste ao seu contexto.
+                Plano sugerido por IA; pode conter erros. Use como orientação geral e ajuste ao seu contexto.
               </Text>
 
               {loadingSuggestion && (

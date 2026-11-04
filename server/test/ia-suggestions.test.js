@@ -24,14 +24,16 @@ test('days are limited to today through Sunday in the configured timezone', () =
 
 test('normalizes valid positive suggestions and preserves the exact missing total', () => {
   const suggestion = validateSuggestion({
-    mensagem_motivacional: 'Consistência acima de tudo.',
+    mensagem_motivacional: 'Vamos lá, 80 minutos hoje e conquista garantida!',
     sugestoes_diarias: [
-      { dia: 'HOJE', minutos_sugeridos: 30, motivo: 'Dia habitual de cardio.' },
-      { dia: 'Sexta-feira', minutos_sugeridos: 30, motivo: 'Complementa a meta.' },
+      { dia: 'Sábado', minutos_sugeridos: 80, motivo: 'Dia habitual de cardio.' },
     ],
-  }, remainingDays, 60);
+  }, remainingDays, 80);
 
-  assert.deepEqual(suggestion.sugestoes_diarias.map((item) => item.dia), ['HOJE', 'Sexta-feira']);
+  assert.equal(suggestion.mensagem_motivacional, 'Mantenha a constância e avance no seu ritmo.');
+  assert.deepEqual(suggestion.sugestoes_diarias, [
+    { dia: 'Sábado', minutos_sugeridos: 80, motivo: 'Dia habitual de cardio.' },
+  ]);
 });
 
 test('rejects zero-minute, past-day, duplicate-day, and mismatched-total suggestions', () => {

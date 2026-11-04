@@ -48,6 +48,7 @@ const CARDIO_WEEKDAYS = [
   { key: 'sunday', label: 'Domingo' },
 ];
 const CARDIO_TIME_ZONE = 'America/Sao_Paulo';
+const CARDIO_MOTIVATIONAL_MESSAGE = 'Mantenha a constância e avance no seu ritmo.';
 
 function getAllowedCardioDays(skipToday = false, now = new Date()) {
   const todayKey = new Intl.DateTimeFormat('en-US', {
@@ -128,7 +129,7 @@ function validateSuggestion(suggestion, allowedDays, missingMinutes) {
   }
 
   return {
-    mensagem_motivacional: suggestion.mensagem_motivacional.trim(),
+    mensagem_motivacional: CARDIO_MOTIVATIONAL_MESSAGE,
     sugestoes_diarias: dailySuggestions,
   };
 }
@@ -256,7 +257,7 @@ const obterSugestaoCardio = async (req, res) => {
           'observado no histórico, salvo se isso tornar a meta impossível. Nunca inclua dia com 0 minutos. ' +
           'Use somente dias permitidos, na ordem informada, e distribua exatamente os minutos faltantes. ' +
           'Retorne somente um objeto JSON válido, sem markdown, comentários ou texto adicional, com o formato ' +
-          '{"mensagem_motivacional":"frase de até 15 palavras","sugestoes_diarias":' +
+          '{"mensagem_motivacional":"frase genérica de incentivo, sem dias ou minutos","sugestoes_diarias":' +
           '[{"dia":"um dos dias permitidos","minutos_sugeridos":30,"motivo":"motivo curto"}]}. ' +
           'minutos_sugeridos deve ser numérico; não inclua campos adicionais.';
         const userPrompt =
