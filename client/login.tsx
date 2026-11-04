@@ -31,8 +31,8 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
   const googleClientId = Platform.select({
-    ios: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
-    android: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
+    ios: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+    android: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
     default: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
   });
 
@@ -46,7 +46,7 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
   const [googleRequest, , promptGoogleLogin] = useAuthRequest(
     {
       clientId: googleClientId || '',
-      redirectUri: makeRedirectUri({ scheme: 'gymfiles', path: 'oauth2redirect' }),
+      redirectUri,
       responseType: ResponseType.IdToken,
       scopes: ['openid', 'profile', 'email'],
       usePKCE: true,

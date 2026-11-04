@@ -12,6 +12,7 @@ model users {
   email            String    @unique @db.VarChar
   secretkey        String?   @db.VarChar
   admin            Boolean   @default(false)
+  is_root          Boolean   @default(false)
   added            DateTime? @default(now()) @db.Timestamp(6)
   username         String?   @db.VarChar
   updated          DateTime? @db.Timestamp(6)
