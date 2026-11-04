@@ -77,7 +77,7 @@ export default function LoginScreen({ navigation, onLoginSuccess }: LoginScreenP
       redirectUri,
       responseType: ResponseType.IdToken,
       scopes: ['openid', 'profile', 'email'],
-      usePKCE: true,
+      usePKCE: false,
       extraParams: { prompt: 'select_account' }, // nonce será adicionado dinamicamente
     },
     { authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth' }
