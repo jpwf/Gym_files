@@ -13,7 +13,7 @@ const loginSchema = z.object({
 // Cardio: tipo, duração (min), data opcional
 const cardioSchema = z.object({
   tipo: z.string().min(1).max(100),
-  duracao_min: z.number().int().positive().max(1440), // max 24h
+  duracao_min: z.coerce.number().int().positive().max(1440), // max 24h
   data: z.string().datetime().optional(),
 });
 
